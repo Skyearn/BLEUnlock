@@ -6,6 +6,22 @@ let DeviceInformation = CBUUID(string:"180A")
 let ManufacturerName = CBUUID(string:"2A29")
 let ModelName = CBUUID(string:"2A24")
 let ExposureNotification = CBUUID(string:"FD6F")
+let nameResolutionLogPath = "/tmp/BLEUnlock-name-resolution.log"
+
+func appendNameResolutionLog(_ message: String) {
+    let line = message + "\n"
+    let data = Data(line.utf8)
+    let fileManager = FileManager.default
+
+    if !fileManager.fileExists(atPath: nameResolutionLogPath) {
+        fileManager.createFile(atPath: nameResolutionLogPath, contents: nil)
+    }
+
+    guard let handle = FileHandle(forWritingAtPath: nameResolutionLogPath) else { return }
+    handle.seekToEndOfFile()
+    handle.write(data)
+    handle.closeFile()
+}
 
 func getMACFromUUID(_ uuid: String) -> String? {
     guard let plist = NSDictionary(contentsOfFile: "/Library/Preferences/com.apple.Bluetooth.plist") else { return nil }
@@ -36,68 +52,144 @@ class Device: NSObject {
     var scanTimer: Timer?
     var macAddr: String?
     var blName: String?
+    var advertisedLocalName: String?
+    var lastNameDebugSnapshot: String?
+
+    func normalizedName(_ candidate: String?) -> String? {
+        guard let candidate = candidate?.trimmingCharacters(in: .whitespaces), !candidate.isEmpty else { return nil }
+        return candidate
+    }
+
+    func isGenericAppleName(_ name: String) -> Bool {
+        name == "iPhone" || name == "iPad"
+    }
+
+    func updateNameIfNeeded(_ candidate: String?) {
+        guard let candidate = normalizedName(candidate) else { return }
+        if blName == nil || blName == uuid.description {
+            blName = candidate
+        }
+    }
+
+    func currentResolvedName() -> String? {
+        if let name = normalizedName(blName), !isGenericAppleName(name) {
+            return name
+        }
+
+        if let name = normalizedName(peripheral?.name) {
+            blName = name
+            if !isGenericAppleName(name) {
+                return name
+            }
+        }
+
+        if let manu = manufacture {
+            if let mod = model {
+                if manu == "Apple Inc.", let appleName = appleDeviceNames[mod] {
+                    return appleName
+                }
+                return String(format: "%@/%@", manu, mod)
+            } else {
+                return manu
+            }
+        }
+
+        if let mod = model {
+            return mod
+        }
+
+        if macAddr == nil || blName == nil {
+            if let info = getLEDeviceInfoFromUUID(uuid.description) {
+                updateNameIfNeeded(info.name)
+                macAddr = macAddr ?? info.macAddr
+            }
+        }
+
+        if macAddr == nil {
+            macAddr = getMACFromUUID(uuid.description)
+        }
+
+        if let mac = macAddr, blName == nil {
+            blName = getNameFromMAC(mac)
+        }
+
+        if let adv = advData, adv.count >= 25 {
+            var iBeaconPrefix : [uint16] = [0x004c, 0x01502]
+            if adv[0...3] == Data(bytes: &iBeaconPrefix, count: 4) {
+                let major = uint16(adv[20]) << 8 | uint16(adv[21])
+                let minor = uint16(adv[22]) << 8 | uint16(adv[23])
+                let tx = Int8(bitPattern: adv[24])
+                let distance = pow(10, Double(Int(tx) - rssi)/20.0)
+                let d = String(format:"%.1f", distance)
+                return "iBeacon [\(major), \(minor)] \(d)m"
+            }
+        }
+
+        if let name = blName {
+            return name
+        }
+
+        if let mac = macAddr {
+            return mac
+        }
+
+        return nil
+    }
+
+    func logNameResolutionIfNeeded(context: String) {
+        let peripheralName = normalizedName(peripheral?.name)
+        let leInfo = getLEDeviceInfoFromUUID(uuid.description)
+        let leName = normalizedName(leInfo?.name)
+        let leMac = leInfo?.macAddr
+        let plistMac = getMACFromUUID(uuid.description)
+        let plistName = normalizedName((plistMac ?? macAddr).flatMap(getNameFromMAC))
+        let resolvedName = currentResolvedName()
+
+        let finalSource: String
+        if let name = normalizedName(advertisedLocalName), !isGenericAppleName(name) {
+            finalSource = "advertisementData.localName"
+        } else if let name = peripheralName, !isGenericAppleName(name) {
+            finalSource = "CBPeripheral.name"
+        } else if manufacture != nil || model != nil {
+            finalSource = "Device Information service"
+        } else if leName != nil {
+            finalSource = "Bluetooth database"
+        } else if plistName != nil {
+            finalSource = "Bluetooth plist cache"
+        } else if resolvedName?.hasPrefix("iBeacon [") == true {
+            finalSource = "iBeacon manufacturer data"
+        } else if leMac != nil || plistMac != nil || macAddr != nil {
+            finalSource = "MAC address only"
+        } else {
+            finalSource = "UUID fallback"
+        }
+
+        let snapshot = [
+            "uuid=\(uuid!.uuidString)",
+            "context=\(context)",
+            "rssi=\(rssi)",
+            "advLocalName=\(advertisedLocalName ?? "<nil>")",
+            "peripheralName=\(peripheralName ?? "<nil>")",
+            "manufacturer=\(manufacture ?? "<nil>")",
+            "model=\(model ?? "<nil>")",
+            "dbName=\(leName ?? "<nil>")",
+            "dbMac=\(leMac ?? "<nil>")",
+            "plistMac=\(plistMac ?? "<nil>")",
+            "plistName=\(plistName ?? "<nil>")",
+            "finalSource=\(finalSource)",
+            "finalValue=\(resolvedName ?? uuid.uuidString)"
+        ].joined(separator: " | ")
+
+        guard snapshot != lastNameDebugSnapshot else { return }
+        lastNameDebugSnapshot = snapshot
+        let message = "[BLEUnlock][NameResolution] \(snapshot)"
+        NSLog("%@", message)
+        appendNameResolutionLog(message)
+    }
     
     override var description: String {
         get {
-            if macAddr == nil || blName == nil {
-                if let info = getLEDeviceInfoFromUUID(uuid.description) {
-                    blName = info.name
-                    macAddr = info.macAddr
-                }
-            }
-            if macAddr == nil {
-                macAddr = getMACFromUUID(uuid.description)
-            }
-            if let mac = macAddr {
-                if blName == nil {
-                    blName = getNameFromMAC(mac)
-                }
-                if let name = blName {
-                    // If it's just "iPhone" or "iPad", there's a chance we can get the model name in the following code
-                    if name != "iPhone" && name != "iPad" {
-                        return name
-                    }
-                }
-            }
-            if let manu = manufacture {
-                if let mod = model {
-                    if manu == "Apple Inc." && appleDeviceNames[mod] != nil {
-                        return appleDeviceNames[mod]!
-                    }
-                    return String(format: "%@/%@", manu, mod)
-                } else {
-                    return manu
-                }
-            }
-            if let name = peripheral?.name {
-                if name.trimmingCharacters(in: .whitespaces).count != 0 {
-                    return name
-                }
-            }
-            if let mod = model {
-                return mod
-            }
-            // iBeacon
-            if let adv = advData {
-                if adv.count >= 25 {
-                    var iBeaconPrefix : [uint16] = [0x004c, 0x01502]
-                    if adv[0...3] == Data(bytes: &iBeaconPrefix, count: 4) {
-                        let major = uint16(adv[20]) << 8 | uint16(adv[21])
-                        let minor = uint16(adv[22]) << 8 | uint16(adv[23])
-                        let tx = Int8(bitPattern: adv[24])
-                        let distance = pow(10, Double(Int(tx) - rssi)/20.0)
-                        let d = String(format:"%.1f", distance)
-                        return "iBeacon [\(major), \(minor)] \(d)m"
-                    }
-                }
-            }
-            if let name = blName {
-                return name
-            }
-            if let mac = macAddr {
-                return mac // better than uuid
-            }
-            return uuid.description
+            return currentResolvedName() ?? uuid.description
         }
     }
 
@@ -111,8 +203,50 @@ protocol BLEDelegate {
     func updateDevice(device: Device)
     func removeDevice(device: Device)
     func updateRSSI(rssi: Int?, active: Bool)
-    func updatePresence(presence: Bool, reason: String)
+    func updatePresence(shouldUnlock: Bool, shouldLock: Bool, reason: String)
     func bluetoothPowerWarn()
+}
+
+enum UnlockDeviceLogic: Int {
+    case anyClose = 0
+    case allClose = 1
+}
+
+enum LockDeviceLogic: Int {
+    case allAway = 0
+    case anyAway = 1
+}
+
+class MonitoredDeviceState {
+    let uuid: UUID
+    weak var peripheral: CBPeripheral?
+    var proximityTimer: Timer?
+    var signalTimer: Timer?
+    var latestRSSIs: [Double] = []
+    var lastReadAt = 0.0
+    var activeModeTimer: Timer?
+    var connectionTimer: Timer?
+    var presence = true
+    var lastRSSI: Int?
+
+    init(uuid: UUID) {
+        self.uuid = uuid
+    }
+
+    var active: Bool {
+        activeModeTimer != nil
+    }
+
+    func invalidateTimers() {
+        proximityTimer?.invalidate()
+        signalTimer?.invalidate()
+        activeModeTimer?.invalidate()
+        connectionTimer?.invalidate()
+        proximityTimer = nil
+        signalTimer = nil
+        activeModeTimer = nil
+        connectionTimer = nil
+    }
 }
 
 class BLE: NSObject, CBCentralManagerDelegate, CBPeripheralDelegate {
@@ -122,26 +256,24 @@ class BLE: NSObject, CBCentralManagerDelegate, CBPeripheralDelegate {
     var devices : [UUID : Device] = [:]
     var delegate: BLEDelegate?
     var scanMode = false
-    var monitoredUUID: UUID?
-    var monitoredPeripheral: CBPeripheral?
-    var proximityTimer : Timer?
-    var signalTimer: Timer?
+    var monitoredUUIDs: Set<UUID> = []
+    var monitoredStates: [UUID: MonitoredDeviceState] = [:]
     var presence = false
+    var shouldLock = false
+    var unlockDeviceLogic: UnlockDeviceLogic = .anyClose
+    var lockDeviceLogic: LockDeviceLogic = .allAway
     var lockRSSI = -80
     var unlockRSSI = -60
     var proximityTimeout = 5.0
     var signalTimeout = 60.0
-    var lastReadAt = 0.0
     var powerWarn = true
     var passiveMode = false
     var thresholdRSSI = -70
-    var latestRSSIs: [Double] = []
     var latestN: Int = 5
-    var activeModeTimer : Timer? = nil
-    var connectionTimer : Timer? = nil
 
     func scanForPeripherals() {
         guard !centralMgr.isScanning else { return }
+        guard centralMgr.state == .poweredOn else { return }
         centralMgr.scanForPeripherals(withServices: nil, options: [CBCentralManagerScanOptionAllowDuplicatesKey: true])
         //print("Start scanning")
     }
@@ -153,7 +285,7 @@ class BLE: NSObject, CBCentralManagerDelegate, CBPeripheralDelegate {
 
     func stopScanning() {
         scanMode = false
-        if activeModeTimer != nil {
+        if monitoredStates.values.contains(where: { $0.active }) {
             centralMgr.stopScan()
         }
     }
@@ -161,40 +293,123 @@ class BLE: NSObject, CBCentralManagerDelegate, CBPeripheralDelegate {
     func setPassiveMode(_ mode: Bool) {
         passiveMode = mode
         if passiveMode {
-            activeModeTimer?.invalidate()
-            activeModeTimer = nil
-            if let p = monitoredPeripheral {
-                centralMgr.cancelPeripheralConnection(p)
+            for state in monitoredStates.values {
+                state.activeModeTimer?.invalidate()
+                state.activeModeTimer = nil
+                state.connectionTimer?.invalidate()
+                state.connectionTimer = nil
+                if let p = state.peripheral {
+                    centralMgr.cancelPeripheralConnection(p)
+                }
             }
         }
         scanForPeripherals()
+    }
+
+    func isMonitoring(uuid: UUID) -> Bool {
+        monitoredUUIDs.contains(uuid)
+    }
+
+    func stopMonitoring(_ state: MonitoredDeviceState) {
+        state.invalidateTimers()
+        if let p = state.peripheral {
+            centralMgr.cancelPeripheralConnection(p)
+        }
     }
 
     func startMonitor(uuid: UUID) {
-        if let p = monitoredPeripheral {
-            centralMgr.cancelPeripheralConnection(p)
+        startMonitor(uuids: Set([uuid]))
+    }
+
+    func startMonitor(uuids: Set<UUID>) {
+        let removed = monitoredUUIDs.subtracting(uuids)
+        for uuid in removed {
+            if let state = monitoredStates.removeValue(forKey: uuid) {
+                stopMonitoring(state)
+            }
         }
-        monitoredUUID = uuid
-        proximityTimer?.invalidate()
-        resetSignalTimer()
-        presence = true
-        monitoredPeripheral = nil
-        activeModeTimer?.invalidate()
-        activeModeTimer = nil
+
+        monitoredUUIDs = uuids
+        for uuid in uuids {
+            let state = monitoredStates[uuid] ?? MonitoredDeviceState(uuid: uuid)
+            state.presence = true
+            state.lastRSSI = nil
+            state.latestRSSIs.removeAll()
+            state.proximityTimer?.invalidate()
+            state.proximityTimer = nil
+            monitoredStates[uuid] = state
+            resetSignalTimer(for: state)
+        }
+
+        presence = !uuids.isEmpty
+        shouldLock = false
+        updateAggregateRSSI()
         scanForPeripherals()
     }
 
-    func resetSignalTimer() {
-        signalTimer?.invalidate()
-        signalTimer = Timer.scheduledTimer(withTimeInterval: signalTimeout, repeats: false, block: { _ in
-            print("Device is lost")
-            self.delegate?.updateRSSI(rssi: nil, active: false)
-            if self.presence {
-                self.presence = false
-                self.delegate?.updatePresence(presence: self.presence, reason: "lost")
+    func setUnlockDeviceLogic(_ logic: UnlockDeviceLogic) {
+        unlockDeviceLogic = logic
+        updateAggregatePresence(reason: "logic")
+    }
+
+    func setLockDeviceLogic(_ logic: LockDeviceLogic) {
+        lockDeviceLogic = logic
+        updateAggregatePresence(reason: "logic")
+    }
+
+    func updateAggregatePresence(reason: String, notify: Bool = true) {
+        let states = monitoredUUIDs.compactMap { monitoredStates[$0] }
+        let newPresence: Bool
+        let newShouldLock: Bool
+        if states.isEmpty {
+            newPresence = false
+            newShouldLock = false
+        } else {
+            switch unlockDeviceLogic {
+            case .anyClose:
+                newPresence = states.contains(where: { $0.presence })
+            case .allClose:
+                newPresence = states.allSatisfy { $0.presence }
+            }
+            switch lockDeviceLogic {
+            case .allAway:
+                newShouldLock = states.allSatisfy { !$0.presence }
+            case .anyAway:
+                newShouldLock = states.contains(where: { !$0.presence })
+            }
+        }
+        guard newPresence != presence || newShouldLock != shouldLock else { return }
+        presence = newPresence
+        shouldLock = newShouldLock
+        if notify {
+            delegate?.updatePresence(shouldUnlock: newPresence, shouldLock: newShouldLock, reason: reason)
+        }
+    }
+
+    func updateAggregateRSSI() {
+        let visibleStates = monitoredStates.values.filter { $0.lastRSSI != nil }
+        let bestRSSI = visibleStates.compactMap(\.lastRSSI).max()
+        let active = visibleStates.contains(where: { $0.active })
+        delegate?.updateRSSI(rssi: bestRSSI, active: active)
+    }
+
+    func resetSignalTimer(for state: MonitoredDeviceState) {
+        state.signalTimer?.invalidate()
+        state.signalTimer = Timer.scheduledTimer(withTimeInterval: signalTimeout, repeats: false, block: { _ in
+            print("Device \(state.uuid) is lost")
+            state.lastRSSI = nil
+            state.activeModeTimer?.invalidate()
+            state.activeModeTimer = nil
+            state.connectionTimer?.invalidate()
+            state.connectionTimer = nil
+            state.latestRSSIs.removeAll()
+            self.updateAggregateRSSI()
+            if state.presence {
+                state.presence = false
+                self.updateAggregatePresence(reason: "lost")
             }
         })
-        if let timer = signalTimer {
+        if let timer = state.signalTimer {
             RunLoop.main.add(timer, forMode: .common)
         }
     }
@@ -203,15 +418,21 @@ class BLE: NSObject, CBCentralManagerDelegate, CBPeripheralDelegate {
         switch central.state {
         case .poweredOn:
             print("Bluetooth powered on")
-            if activeModeTimer == nil {
+            if !monitoredStates.values.contains(where: { $0.active }) {
                 scanForPeripherals()
             }
             powerWarn = false
         case .poweredOff:
             print("Bluetooth powered off")
+            for state in monitoredStates.values {
+                state.invalidateTimers()
+                state.lastRSSI = nil
+                state.latestRSSIs.removeAll()
+                state.presence = false
+            }
             presence = false
-            signalTimer?.invalidate()
-            signalTimer = nil
+            shouldLock = false
+            updateAggregateRSSI()
             if powerWarn {
                 powerWarn = false
                 delegate?.bluetoothPowerWarn()
@@ -221,80 +442,93 @@ class BLE: NSObject, CBCentralManagerDelegate, CBPeripheralDelegate {
         }
     }
     
-    func getEstimatedRSSI(rssi: Int) -> Int {
-        if latestRSSIs.count >= latestN {
-            latestRSSIs.removeFirst()
+    func getEstimatedRSSI(state: MonitoredDeviceState, rssi: Int) -> Int {
+        if state.latestRSSIs.count >= latestN {
+            state.latestRSSIs.removeFirst()
         }
-        latestRSSIs.append(Double(rssi))
+        state.latestRSSIs.append(Double(rssi))
         var mean: Double = 0.0
         var sddev: Double = 0.0
-        vDSP_normalizeD(latestRSSIs, 1, nil, 1, &mean, &sddev, vDSP_Length(latestRSSIs.count))
+        vDSP_normalizeD(state.latestRSSIs, 1, nil, 1, &mean, &sddev, vDSP_Length(state.latestRSSIs.count))
         return Int(mean)
     }
 
-    func updateMonitoredPeripheral(_ rssi: Int) {
-        // print(String(format: "rssi: %d", rssi))
-        if rssi >= (unlockRSSI == UNLOCK_DISABLED ? lockRSSI : unlockRSSI) && !presence {
-            print("Device is close")
-            presence = true
-            delegate?.updatePresence(presence: presence, reason: "close")
-            latestRSSIs.removeAll() // Avoid bouncing
+    func updateMonitoredState(_ state: MonitoredDeviceState, rssi: Int) {
+        if rssi >= (unlockRSSI == UNLOCK_DISABLED ? lockRSSI : unlockRSSI) && !state.presence {
+            print("Device \(state.uuid) is close")
+            state.presence = true
+            state.latestRSSIs.removeAll() // Avoid bouncing
+            updateAggregatePresence(reason: "close")
         }
 
-        let estimatedRSSI = getEstimatedRSSI(rssi: rssi)
-        delegate?.updateRSSI(rssi: estimatedRSSI, active: activeModeTimer != nil)
+        let estimatedRSSI = getEstimatedRSSI(state: state, rssi: rssi)
+        state.lastRSSI = estimatedRSSI
+        updateAggregateRSSI()
 
         if estimatedRSSI >= (lockRSSI == LOCK_DISABLED ? unlockRSSI : lockRSSI) {
-            if let timer = proximityTimer {
+            if let timer = state.proximityTimer {
                 timer.invalidate()
-                print("Proximity timer canceled")
-                proximityTimer = nil
+                print("Proximity timer canceled for \(state.uuid)")
+                state.proximityTimer = nil
             }
-        } else if presence && proximityTimer == nil {
-            proximityTimer = Timer.scheduledTimer(withTimeInterval: proximityTimeout, repeats: false, block: { _ in
-                print("Device is away")
-                self.presence = false
-                self.delegate?.updatePresence(presence: self.presence, reason: "away")
-                self.proximityTimer = nil
+        } else if state.presence && state.proximityTimer == nil {
+            state.proximityTimer = Timer.scheduledTimer(withTimeInterval: proximityTimeout, repeats: false, block: { _ in
+                print("Device \(state.uuid) is away")
+                state.presence = false
+                self.updateAggregatePresence(reason: "away")
+                state.proximityTimer = nil
             })
-            RunLoop.main.add(proximityTimer!, forMode: .common)
-            print("Proximity timer started")
+            if let timer = state.proximityTimer {
+                RunLoop.main.add(timer, forMode: .common)
+            }
+            print("Proximity timer started for \(state.uuid)")
         }
-        resetSignalTimer()
+        resetSignalTimer(for: state)
+    }
+
+    func monitoredState(for peripheral: CBPeripheral) -> MonitoredDeviceState? {
+        monitoredStates[peripheral.identifier]
+    }
+
+    func connectMonitoredPeripheral(_ state: MonitoredDeviceState) {
+        guard let p = state.peripheral else { return }
+        guard centralMgr.state == .poweredOn else { return }
+
+        if p.state == .connected {
+            p.delegate = self
+            p.readRSSI()
+            return
+        }
+
+        guard p.state == .disconnected else { return }
+        print("Connecting \(state.uuid)")
+        centralMgr.connect(p, options: nil)
+        state.connectionTimer?.invalidate()
+        state.connectionTimer = Timer.scheduledTimer(withTimeInterval: 60, repeats: false, block: { _ in
+            if p.state == .connecting {
+                print("Connection timeout \(state.uuid)")
+                self.centralMgr.cancelPeripheralConnection(p)
+            }
+        })
+        if let timer = state.connectionTimer {
+            RunLoop.main.add(timer, forMode: .common)
+        }
     }
 
     func resetScanTimer(device: Device) {
         device.scanTimer?.invalidate()
         device.scanTimer = Timer.scheduledTimer(withTimeInterval: signalTimeout, repeats: false, block: { _ in
             self.delegate?.removeDevice(device: device)
-            if let p = device.peripheral {
+            if let p = device.peripheral, !self.isMonitoring(uuid: device.uuid) {
                 self.centralMgr.cancelPeripheralConnection(p)
             }
-            self.devices.removeValue(forKey: device.uuid)
+            if !self.isMonitoring(uuid: device.uuid) {
+                self.devices.removeValue(forKey: device.uuid)
+            }
         })
         if let timer = device.scanTimer {
             RunLoop.main.add(timer, forMode: .common)
         }
-    }
-
-    func connectMonitoredPeripheral() {
-        guard let p = monitoredPeripheral else { return }
-
-        // Idk why but this works like a charm when 'didConnect' won't get called.
-        // However, this generates warnings in the log.
-        p.readRSSI()
-
-        guard p.state == .disconnected else { return }
-        print("Connecting")
-        centralMgr.connect(p, options: nil)
-        connectionTimer?.invalidate()
-        connectionTimer = Timer.scheduledTimer(withTimeInterval: 60, repeats: false, block: { _ in
-            if p.state == .connecting {
-                print("Connection timeout")
-                self.centralMgr.cancelPeripheralConnection(p)
-            }
-        })
-        RunLoop.main.add(connectionTimer!, forMode: .common)
     }
 
     //MARK:- CBCentralManagerDelegate start
@@ -305,23 +539,18 @@ class BLE: NSObject, CBCentralManagerDelegate, CBPeripheralDelegate {
                         rssi RSSI: NSNumber)
     {
         let rssi = RSSI.intValue > 0 ? 0 : RSSI.intValue
-        if let uuid = monitoredUUID {
-            if peripheral.identifier.description == uuid.description {
-                if monitoredPeripheral == nil {
-                    monitoredPeripheral = peripheral
-                }
-                if activeModeTimer == nil {
-                    //print("Discover \(rssi)dBm")
-                    updateMonitoredPeripheral(rssi)
-                    if !passiveMode {
-                        connectMonitoredPeripheral()
-                    }
+        if let state = monitoredStates[peripheral.identifier] {
+            state.peripheral = peripheral
+            if !state.active {
+                updateMonitoredState(state, rssi: rssi)
+                if !passiveMode {
+                    connectMonitoredPeripheral(state)
                 }
             }
         }
 
         if (scanMode) {
-            if let uuids = advertisementData["kCBAdvDataServiceUUIDs"] as? [CBUUID] {
+            if let uuids = advertisementData[CBAdvertisementDataServiceUUIDsKey] as? [CBUUID] {
                 for uuid in uuids {
                     if uuid == ExposureNotification {
                         //print("Device \(peripheral.identifier) Exposure Notification")
@@ -336,14 +565,22 @@ class BLE: NSObject, CBCentralManagerDelegate, CBPeripheralDelegate {
                 if (rssi >= thresholdRSSI) {
                     device.peripheral = peripheral
                     device.rssi = rssi
-                    device.advData = advertisementData["kCBAdvDataManufacturerData"] as? Data
+                    device.advData = advertisementData[CBAdvertisementDataManufacturerDataKey] as? Data
+                    device.advertisedLocalName = device.normalizedName(advertisementData[CBAdvertisementDataLocalNameKey] as? String)
+                    device.updateNameIfNeeded(device.advertisedLocalName)
                     devices[peripheral.identifier] = device
                     central.connect(peripheral, options: nil)
+                    device.logNameResolutionIfNeeded(context: "discover:new")
                     delegate?.newDevice(device: device)
                 }
             } else {
                 device = dev!
+                device.peripheral = peripheral
                 device.rssi = rssi
+                device.advData = advertisementData[CBAdvertisementDataManufacturerDataKey] as? Data ?? device.advData
+                device.advertisedLocalName = device.normalizedName(advertisementData[CBAdvertisementDataLocalNameKey] as? String) ?? device.advertisedLocalName
+                device.updateNameIfNeeded(device.advertisedLocalName)
+                device.logNameResolutionIfNeeded(context: "discover:update")
                 delegate?.updateDevice(device: device)
             }
             resetScanTimer(device: device)
@@ -357,10 +594,10 @@ class BLE: NSObject, CBCentralManagerDelegate, CBPeripheralDelegate {
         if scanMode {
             peripheral.discoverServices([DeviceInformation])
         }
-        if peripheral == monitoredPeripheral && !passiveMode {
-            print("Connected")
-            connectionTimer?.invalidate()
-            connectionTimer = nil
+        if let state = monitoredState(for: peripheral), !passiveMode {
+            print("Connected \(state.uuid)")
+            state.connectionTimer?.invalidate()
+            state.connectionTimer = nil
             peripheral.readRSSI()
         }
     }
@@ -370,31 +607,32 @@ class BLE: NSObject, CBCentralManagerDelegate, CBPeripheralDelegate {
     //MARK:- CBPeripheralDelegate start
 
     func peripheral(_ peripheral: CBPeripheral, didReadRSSI RSSI: NSNumber, error: Error?) {
-        guard peripheral == monitoredPeripheral else { return }
+        guard let state = monitoredState(for: peripheral) else { return }
         let rssi = RSSI.intValue > 0 ? 0 : RSSI.intValue
-        //print("readRSSI \(rssi)dBm")
-        updateMonitoredPeripheral(rssi)
-        lastReadAt = Date().timeIntervalSince1970
+        updateMonitoredState(state, rssi: rssi)
+        state.lastReadAt = Date().timeIntervalSince1970
 
-        if activeModeTimer == nil && !passiveMode {
-            print("Entering active mode")
+        if state.activeModeTimer == nil && !passiveMode {
+            print("Entering active mode for \(state.uuid)")
             if !scanMode {
                 centralMgr.stopScan()
             }
-            activeModeTimer = Timer.scheduledTimer(withTimeInterval: 2, repeats: true, block: { _ in
-                if Date().timeIntervalSince1970 > self.lastReadAt + 10 {
-                    print("Falling back to passive mode")
+            state.activeModeTimer = Timer.scheduledTimer(withTimeInterval: 2, repeats: true, block: { _ in
+                if Date().timeIntervalSince1970 > state.lastReadAt + 10 {
+                    print("Falling back to passive mode for \(state.uuid)")
                     self.centralMgr.cancelPeripheralConnection(peripheral)
-                    self.activeModeTimer?.invalidate()
-                    self.activeModeTimer = nil
+                    state.activeModeTimer?.invalidate()
+                    state.activeModeTimer = nil
                     self.scanForPeripherals()
                 } else if peripheral.state == .connected {
                     peripheral.readRSSI()
                 } else {
-                    self.connectMonitoredPeripheral()
+                    self.connectMonitoredPeripheral(state)
                 }
             })
-            RunLoop.main.add(activeModeTimer!, forMode: .common)
+            if let timer = state.activeModeTimer {
+                RunLoop.main.add(timer, forMode: .common)
+            }
         }
     }
 
@@ -432,13 +670,15 @@ class BLE: NSObject, CBCentralManagerDelegate, CBPeripheralDelegate {
                 if let device = devices[peripheral.identifier] {
                     if characteristic.uuid == ManufacturerName {
                         device.manufacture = s
+                        device.logNameResolutionIfNeeded(context: "characteristic:manufacturer")
                         delegate?.updateDevice(device: device)
                     }
                     if characteristic.uuid == ModelName {
                         device.model = s
+                        device.logNameResolutionIfNeeded(context: "characteristic:model")
                         delegate?.updateDevice(device: device)
                     }
-                    if device.model != nil && device.model != nil && device.peripheral != monitoredPeripheral {
+                    if device.model != nil && device.model != nil && !isMonitoring(uuid: device.uuid) {
                         centralMgr.cancelPeripheralConnection(peripheral)
                     }
                 }

@@ -19,7 +19,7 @@
     [components removeLastObject];
     [components removeLastObject];
     NSString *mainPath = [NSString pathWithComponents:components];
-    [[NSWorkspace sharedWorkspace] launchApplication:mainPath];
+    [[NSWorkspace sharedWorkspace] openURL:[NSURL fileURLWithPath:mainPath]];
     [NSApp terminate:self];
 }
 

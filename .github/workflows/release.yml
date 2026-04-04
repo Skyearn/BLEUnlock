@@ -1,0 +1,41 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "*"
+
+permissions:
+  contents: write
+
+jobs:
+  build-and-release:
+    runs-on: macos-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Build Release App
+        run: |
+          xcodebuild \
+            -project BLEUnlock.xcodeproj \
+            -scheme BLEUnlock \
+            -configuration Release \
+            -derivedDataPath build \
+            CODE_SIGNING_ALLOWED=NO \
+            build
+
+      - name: Package App
+        run: |
+          cd build/Build/Products/Release
+          ditto -c -k --keepParent BLEUnlock.app BLEUnlock-${GITHUB_REF_NAME}.zip
+
+      - name: Create GitHub Release
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release create "${GITHUB_REF_NAME}" \
+            "build/Build/Products/Release/BLEUnlock-${GITHUB_REF_NAME}.zip" \
+            --title "${GITHUB_REF_NAME}" \
+            --notes-file CHANGELOG.md

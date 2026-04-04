@@ -1,5 +1,6 @@
 // Resolve MAC address and device name of BLE device from SQLite database at /Library/Bluetooth introduced in Monterey.
 
+import Foundation
 import SQLite3
 
 private var inited = false
@@ -9,13 +10,19 @@ private var db_other: OpaquePointer?
 private func connect() {
     if inited { return }
 
-    if sqlite3_open("/Library/Bluetooth/com.apple.MobileBluetooth.ledevices.paired.db", &db_paired) == SQLITE_OK {
+    let fileManager = FileManager.default
+    let pairedPath = "/Library/Bluetooth/com.apple.MobileBluetooth.ledevices.paired.db"
+    let otherPath = "/Library/Bluetooth/com.apple.MobileBluetooth.ledevices.other.db"
+
+    if fileManager.isReadableFile(atPath: pairedPath) &&
+        sqlite3_open_v2(pairedPath, &db_paired, SQLITE_OPEN_READONLY, nil) == SQLITE_OK {
         print("paired.db open success")
     } else {
         db_paired = nil
     }
 
-    if sqlite3_open("/Library/Bluetooth/com.apple.MobileBluetooth.ledevices.other.db", &db_other) == SQLITE_OK {
+    if fileManager.isReadableFile(atPath: otherPath) &&
+        sqlite3_open_v2(otherPath, &db_other, SQLITE_OPEN_READONLY, nil) == SQLITE_OK {
         print("other.db open success")
     } else {
         db_other = nil
@@ -44,6 +51,7 @@ private func getPairedDeviceFromUUID(_ uuid: String) -> LEDeviceInfo? {
         print("failed to prepare")
         return nil
     }
+    defer { sqlite3_finalize(stmt) }
     if sqlite3_step(stmt) != SQLITE_ROW {
         return nil
     }
@@ -68,6 +76,7 @@ private func getOtherDeviceFromUUID(_ uuid: String) -> LEDeviceInfo? {
         print("failed to prepare")
         return nil
     }
+    defer { sqlite3_finalize(stmt) }
     if sqlite3_step(stmt) != SQLITE_ROW {
         return nil
     }

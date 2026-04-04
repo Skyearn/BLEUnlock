@@ -2,8 +2,8 @@
 
 ## 请注意：本应用不在 Mac App Store 发布，你可以在这里免费获取。
 
-![CI](https://github.com/ts1/BLEUnlock/workflows/CI/badge.svg)
-![Github All Releases](https://img.shields.io/github/downloads/ts1/BLEUnlock/total.svg)
+![CI](https://github.com/Skyearn/BLEUnlock/workflows/CI/badge.svg)
+![Github All Releases](https://img.shields.io/github/downloads/Skyearn/BLEUnlock/total.svg)
 [![Buy me a coffee](img/buymeacoffee.svg)](https://www.buymeacoffee.com/tsone)
 
 BLEUnlock 是一款常驻菜单栏的小工具，可以根据 iPhone、Apple Watch 或其他蓝牙低功耗设备与 Mac 的距离，自动锁定或解锁 Mac。
@@ -29,15 +29,15 @@ BLEUnlock 是一款常驻菜单栏的小工具，可以根据 iPhone、Apple Wat
 
 ## 安装
 
-### 使用 Homebrew Cask
+### ~~使用 Homebrew Cask~~
 
-```sh
-brew install bleunlock
-```
+~~`brew install bleunlock`~~
+
+> 由于这是一个 fork 版本，当前不维护 Homebrew Cask，请使用下面的手动安装方式。
 
 ### 手动安装
 
-从 [Releases](https://github.com/ts1/BLEUnlock/releases) 下载 zip 文件，解压后拖到“应用程序”文件夹。
+从 [Releases](https://github.com/Skyearn/BLEUnlock/releases) 下载 zip 文件，解压后拖到“应用程序”文件夹。
 
 ## 初次设置
 

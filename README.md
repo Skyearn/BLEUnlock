@@ -2,8 +2,8 @@
 
 ## Please note that I don't distribute this app on the Mac App Store. You can find it here for free! 
 
-![CI](https://github.com/ts1/BLEUnlock/workflows/CI/badge.svg)
-![Github All Releases](https://img.shields.io/github/downloads/ts1/BLEUnlock/total.svg)
+![CI](https://github.com/Skyearn/BLEUnlock/workflows/CI/badge.svg)
+![Github All Releases](https://img.shields.io/github/downloads/Skyearn/BLEUnlock/total.svg)
 [![Buy me a coffee](img/buymeacoffee.svg)](https://www.buymeacoffee.com/tsone)
 
 BLEUnlock is a small menu bar utility that locks and unlocks your Mac by proximity of your iPhone, Apple Watch, or any other Bluetooth Low Energy device.
@@ -29,15 +29,15 @@ This document is also available in [Japanese (日本語版はこちら)](README.
 
 ## Installation
 
-### Using Homebrew Cask
+### ~~Using Homebrew Cask~~
 
-```
-brew install bleunlock
-```
+~~`brew install bleunlock`~~
+
+> This fork does not maintain the Homebrew Cask, so please use the manual installation method below.
 
 ### Manual installation
 
-Download the zip file from [Releases](https://github.com/ts1/BLEUnlock/releases), unzip and move to the Applications folder.
+Download the zip file from [Releases](https://github.com/Skyearn/BLEUnlock/releases), unzip and move to the Applications folder.
 
 ## Setting up
 

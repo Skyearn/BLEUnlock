@@ -49,6 +49,7 @@ class Device: NSObject {
     var model : String?
     var advData: Data?
     var rssi: Int = 0
+    var isVisible = false
     var scanTimer: Timer?
     var macAddr: String?
     var blName: String?
@@ -72,15 +73,13 @@ class Device: NSObject {
     }
 
     func currentResolvedName() -> String? {
-        if let name = normalizedName(blName), !isGenericAppleName(name) {
+        if let name = normalizedName(blName) {
             return name
         }
 
         if let name = normalizedName(peripheral?.name) {
             blName = name
-            if !isGenericAppleName(name) {
-                return name
-            }
+            return name
         }
 
         if let manu = manufacture {
@@ -146,9 +145,9 @@ class Device: NSObject {
         let resolvedName = currentResolvedName()
 
         let finalSource: String
-        if let name = normalizedName(advertisedLocalName), !isGenericAppleName(name) {
+        if normalizedName(advertisedLocalName) != nil {
             finalSource = "advertisementData.localName"
-        } else if let name = peripheralName, !isGenericAppleName(name) {
+        } else if peripheralName != nil {
             finalSource = "CBPeripheral.name"
         } else if manufacture != nil || model != nil {
             finalSource = "Device Information service"
@@ -270,6 +269,33 @@ class BLE: NSObject, CBCentralManagerDelegate, CBPeripheralDelegate {
     var passiveMode = false
     var thresholdRSSI = -70
     var latestN: Int = 5
+    var lastAuthorizationRefreshAt = 0.0
+    let minimumAuthorizationRefreshInterval = 2.0
+
+    var needsPermissionRecovery: Bool {
+        guard scanMode || !monitoredUUIDs.isEmpty else { return false }
+        switch centralMgr.state {
+        case .unauthorized, .unknown, .resetting:
+            return true
+        default:
+            return false
+        }
+    }
+
+    func recoverAfterPermissionChangeIfNeeded() {
+        if centralMgr.state == .poweredOn {
+            scanForPeripherals()
+            return
+        }
+        guard needsPermissionRecovery else { return }
+        let now = Date().timeIntervalSince1970
+        guard now - lastAuthorizationRefreshAt >= minimumAuthorizationRefreshInterval else { return }
+        lastAuthorizationRefreshAt = now
+        print("Refreshing Bluetooth authorization state")
+        centralMgr.stopScan()
+        centralMgr.delegate = nil
+        centralMgr = CBCentralManager(delegate: self, queue: nil)
+    }
 
     func scanForPeripherals() {
         guard !centralMgr.isScanning else { return }
@@ -333,10 +359,18 @@ class BLE: NSObject, CBCentralManagerDelegate, CBPeripheralDelegate {
         for uuid in uuids {
             let state = monitoredStates[uuid] ?? MonitoredDeviceState(uuid: uuid)
             state.presence = true
-            state.lastRSSI = nil
             state.latestRSSIs.removeAll()
             state.proximityTimer?.invalidate()
             state.proximityTimer = nil
+
+            if let device = devices[uuid] {
+                state.peripheral = device.peripheral ?? state.peripheral
+                state.lastRSSI = device.rssi
+                state.latestRSSIs.append(Double(device.rssi))
+            } else {
+                state.lastRSSI = nil
+            }
+
             monitoredStates[uuid] = state
             resetSignalTimer(for: state)
         }
@@ -418,12 +452,14 @@ class BLE: NSObject, CBCentralManagerDelegate, CBPeripheralDelegate {
         switch central.state {
         case .poweredOn:
             print("Bluetooth powered on")
+            lastAuthorizationRefreshAt = 0
             if !monitoredStates.values.contains(where: { $0.active }) {
                 scanForPeripherals()
             }
             powerWarn = false
         case .poweredOff:
             print("Bluetooth powered off")
+            lastAuthorizationRefreshAt = 0
             for state in monitoredStates.values {
                 state.invalidateTimers()
                 state.lastRSSI = nil
@@ -518,6 +554,7 @@ class BLE: NSObject, CBCentralManagerDelegate, CBPeripheralDelegate {
     func resetScanTimer(device: Device) {
         device.scanTimer?.invalidate()
         device.scanTimer = Timer.scheduledTimer(withTimeInterval: signalTimeout, repeats: false, block: { _ in
+            device.isVisible = false
             self.delegate?.removeDevice(device: device)
             if let p = device.peripheral, !self.isMonitoring(uuid: device.uuid) {
                 self.centralMgr.cancelPeripheralConnection(p)
@@ -565,6 +602,7 @@ class BLE: NSObject, CBCentralManagerDelegate, CBPeripheralDelegate {
                 if (rssi >= thresholdRSSI) {
                     device.peripheral = peripheral
                     device.rssi = rssi
+                    device.isVisible = true
                     device.advData = advertisementData[CBAdvertisementDataManufacturerDataKey] as? Data
                     device.advertisedLocalName = device.normalizedName(advertisementData[CBAdvertisementDataLocalNameKey] as? String)
                     device.updateNameIfNeeded(device.advertisedLocalName)
@@ -577,6 +615,7 @@ class BLE: NSObject, CBCentralManagerDelegate, CBPeripheralDelegate {
                 device = dev!
                 device.peripheral = peripheral
                 device.rssi = rssi
+                device.isVisible = true
                 device.advData = advertisementData[CBAdvertisementDataManufacturerDataKey] as? Data ?? device.advData
                 device.advertisedLocalName = device.normalizedName(advertisementData[CBAdvertisementDataLocalNameKey] as? String) ?? device.advertisedLocalName
                 device.updateNameIfNeeded(device.advertisedLocalName)

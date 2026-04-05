@@ -120,15 +120,19 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenuItemVa
     var userNotificationID: String?
     var nowPlayingWasPlaying = false
     var aboutBox: AboutBox? = nil
-    var wakeTimer: Timer?
     var manualLock = false
     var unlockedAt = 0.0
     var inScreensaver = false
     var lastRSSI: Int? = nil
     var deviceMenuIsOpen = false
     var deviceMenuNeedsRefresh = false
+    var systemWakeTimer: Timer?
     var wakeUnlockTimer: Timer?
+    var postUnlockRetryTimer: Timer?
+    var permissionRecoveryTimer: Timer?
     var lastWakeAt = 0.0
+    var lastDisplayWakeRequestAt = 0.0
+    let minimumWakeRequestInterval = 15.0
     let wakeUnlockRetryDelay = 0.5
     let wakeUnlockMaxRetries = 8
 
@@ -210,7 +214,10 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenuItemVa
         } else {
             desc = device.description
         }
-        return String(format: "%@ (%ddBm)", desc, displayedRSSI(for: device))
+        if let rssi = displayedRSSI(for: device.uuid) {
+            return menuItemTitle(title: desc, rssi: rssi)
+        }
+        return menuItemTitleNotDetected(title: desc)
     }
 
     func menuItemTitleNotDetected(title: String) -> String {
@@ -221,11 +228,18 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenuItemVa
         menuItemTitleNotDetected(title: device.description)
     }
 
-    func displayedRSSI(for device: Device) -> Int {
-        if let monitoredRSSI = ble.monitoredStates[device.uuid]?.lastRSSI {
+    func menuItemTitle(title: String, rssi: Int) -> String {
+        String(format: "%@ (%ddBm)", title, rssi)
+    }
+
+    func displayedRSSI(for uuid: UUID) -> Int? {
+        if let monitoredRSSI = ble.monitoredStates[uuid]?.lastRSSI {
             return monitoredRSSI
         }
-        return device.rssi
+        if let device = ble.devices[uuid], device.isVisible {
+            return device.rssi
+        }
+        return nil
     }
 
     func configuredDeviceCheckbox(uuid: UUID, title: String) -> NSButton {
@@ -303,8 +317,15 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenuItemVa
     func removeDevice(device: Device) {
         if ble.isMonitoring(uuid: device.uuid) {
             if let checkbox = deviceCheckboxDict[device.uuid] {
-                updateDeviceCheckbox(checkbox, uuid: device.uuid, title: menuItemTitleNotDetected(device: device))
+                let title: String
+                if displayedRSSI(for: device.uuid) != nil {
+                    title = menuItemTitle(device: device)
+                } else {
+                    title = menuItemTitleNotDetected(device: device)
+                }
+                updateDeviceCheckbox(checkbox, uuid: device.uuid, title: title)
             }
+            updateMonitorStatusItems()
             return
         }
         if let menuItem = deviceDict[device.uuid] {
@@ -343,7 +364,13 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenuItemVa
                 }
             } else if let checkbox = deviceCheckboxDict[uuid] {
                 if ble.isMonitoring(uuid: uuid) {
-                    updateDeviceCheckbox(checkbox, uuid: uuid, title: menuItemTitleNotDetected(title: monitoredDeviceTitle(uuid: uuid)))
+                    let title: String
+                    if let rssi = displayedRSSI(for: uuid) {
+                        title = menuItemTitle(title: monitoredDeviceTitle(uuid: uuid), rssi: rssi)
+                    } else {
+                        title = menuItemTitleNotDetected(title: monitoredDeviceTitle(uuid: uuid))
+                    }
+                    updateDeviceCheckbox(checkbox, uuid: uuid, title: title)
                 } else {
                     staleUUIDs.append(uuid)
                 }
@@ -371,8 +398,9 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenuItemVa
 
     func monitoredDeviceStatusTitle(uuid: UUID) -> String {
         let title = monitoredDeviceTitle(uuid: uuid)
-        if let state = ble.monitoredStates[uuid], let rssi = state.lastRSSI {
-            let activeSuffix = state.active ? t("monitor_status_active_suffix") : ""
+        if let rssi = displayedRSSI(for: uuid) {
+            let state = ble.monitoredStates[uuid]
+            let activeSuffix = state?.active == true ? t("monitor_status_active_suffix") : ""
             return String(format: t("monitor_status_device_detected"), title, rssi, activeSuffix)
         }
         return String(format: t("monitor_status_device_not_detected"), title, t("not_detected"))
@@ -386,13 +414,14 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenuItemVa
             return t("device_not_set")
         }
 
-        if let bestUUID = orderedUUIDs.max(by: { (ble.monitoredStates[$0]?.lastRSSI ?? Int.min) < (ble.monitoredStates[$1]?.lastRSSI ?? Int.min) }),
-           let bestState = ble.monitoredStates[bestUUID],
-           let bestRSSI = bestState.lastRSSI
-        {
-            let detected = ble.monitoredUUIDs.compactMap { ble.monitoredStates[$0]?.lastRSSI }.count
-            let activeSuffix = bestState.active ? t("monitor_status_active_suffix") : ""
-            return String(format: t("monitor_status_strongest_detected"), detected, orderedUUIDs.count, bestRSSI, activeSuffix)
+        let visibleDevices = orderedUUIDs.compactMap { uuid -> (UUID, Int)? in
+            guard let rssi = displayedRSSI(for: uuid) else { return nil }
+            return (uuid, rssi)
+        }
+
+        if let strongest = visibleDevices.max(by: { $0.1 < $1.1 }) {
+            let detected = visibleDevices.count
+            return String(format: t("monitor_status_strongest_detected"), detected, orderedUUIDs.count, strongest.1)
         }
         return String(format: t("monitor_status_not_detected"), 0, orderedUUIDs.count)
     }
@@ -556,12 +585,14 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenuItemVa
                     userNotification = nil
                 }
                 if displaySleep && !systemSleep && prefs.bool(forKey: "wakeOnProximity") {
-                    print("Waking display")
-                    wakeDisplay()
-                    wakeTimer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true, block: { _ in
-                        print("Retrying waking display")
+                    let now = Date().timeIntervalSince1970
+                    if now - lastDisplayWakeRequestAt >= minimumWakeRequestInterval {
+                        print("Waking display")
+                        lastDisplayWakeRequestAt = now
                         wakeDisplay()
-                    })
+                    } else {
+                        print("Skipping wake display retry while display wake is still pending")
+                    }
                 }
                 tryUnlockScreen()
             }
@@ -657,12 +688,23 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenuItemVa
 
             // On wake, the first attempt can land before the login UI is fully ready.
             if (recentlyWoke || self.inScreensaver) && retryCount < self.wakeUnlockMaxRetries {
-                Timer.scheduledTimer(withTimeInterval: 1.5, repeats: false, block: { _ in
+                self.postUnlockRetryTimer?.invalidate()
+                self.postUnlockRetryTimer = Timer.scheduledTimer(withTimeInterval: 1.5, repeats: false, block: { _ in
+                    self.postUnlockRetryTimer = nil
                     guard self.isScreenLocked() else { return }
                     self.scheduleWakeUnlock(after: self.wakeUnlockRetryDelay, retryCount: retryCount + 1)
                 })
             }
         })
+    }
+
+    func cancelWakeRelatedTimers() {
+        systemWakeTimer?.invalidate()
+        systemWakeTimer = nil
+        wakeUnlockTimer?.invalidate()
+        wakeUnlockTimer = nil
+        postUnlockRetryTimer?.invalidate()
+        postUnlockRetryTimer = nil
     }
 
     func scheduleWakeUnlock(after delay: TimeInterval, retryCount: Int = 0) {
@@ -678,21 +720,21 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenuItemVa
         //unlockedAt = Date().timeIntervalSince1970
         displaySleep = false
         lastWakeAt = Date().timeIntervalSince1970
-        wakeTimer?.invalidate()
-        wakeTimer = nil
+        lastDisplayWakeRequestAt = 0
         scheduleWakeUnlock(after: 0.75)
     }
 
     @objc func onDisplaySleep() {
         print("display sleep")
         displaySleep = true
-        wakeUnlockTimer?.invalidate()
-        wakeUnlockTimer = nil
+        cancelWakeRelatedTimers()
     }
 
     @objc func onSystemWake() {
         print("system wake")
-        Timer.scheduledTimer(withTimeInterval: 1, repeats: false, block: { _ in
+        systemWakeTimer?.invalidate()
+        systemWakeTimer = Timer.scheduledTimer(withTimeInterval: 1, repeats: false, block: { _ in
+            self.systemWakeTimer = nil
             print("delayed system wake job")
             NSApp.setActivationPolicy(.accessory) // Hide Dock icon again
             self.systemSleep = false
@@ -704,8 +746,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenuItemVa
     @objc func onSystemSleep() {
         print("system sleep")
         systemSleep = true
-        wakeUnlockTimer?.invalidate()
-        wakeUnlockTimer = nil
+        cancelWakeRelatedTimers()
         // Set activation policy to regular, so the CBCentralManager can scan for peripherals
         // when the Bluetooth will become on again.
         // This enables Dock icon but the screen is off anyway.
@@ -713,8 +754,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenuItemVa
     }
 
     @objc func onUnlock() {
-        wakeUnlockTimer?.invalidate()
-        wakeUnlockTimer = nil
+        cancelWakeRelatedTimers()
         Timer.scheduledTimer(withTimeInterval: 2, repeats: false, block: { _ in
             print("onUnlock")
             if Date().timeIntervalSince1970 >= self.unlockedAt + 10 {
@@ -1073,9 +1113,16 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenuItemVa
         statusItem.menu = mainMenu
     }
 
-    func checkAccessibility() {
-        let key = kAXTrustedCheckOptionPrompt.takeRetainedValue() as String
-        if (!AXIsProcessTrustedWithOptions([key: true] as CFDictionary)) {
+    @discardableResult
+    func checkAccessibility(showPrompt: Bool = true) -> Bool {
+        let trusted: Bool
+        if showPrompt {
+            let key = kAXTrustedCheckOptionPrompt.takeRetainedValue() as String
+            trusted = AXIsProcessTrustedWithOptions([key: true] as CFDictionary)
+        } else {
+            trusted = AXIsProcessTrusted()
+        }
+        if !trusted && showPrompt {
             // Sometimes Prompt option above doesn't work.
             // Actually trying to send key may open that dialog.
             let src = CGEventSource(stateID: .hidSystemState)
@@ -1083,6 +1130,35 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenuItemVa
             CGEvent(keyboardEventSource: src, virtualKey: 63, keyDown: true)?.post(tap: .cghidEventTap)
             CGEvent(keyboardEventSource: src, virtualKey: 63, keyDown: false)?.post(tap: .cghidEventTap)
         }
+        return trusted
+    }
+
+    func requiresAccessibilityPermission() -> Bool {
+        ble.unlockRSSI != ble.UNLOCK_DISABLED && !prefs.bool(forKey: "wakeWithoutUnlocking")
+    }
+
+    func refreshPermissionRecovery() {
+        let accessibilityTrusted = !requiresAccessibilityPermission() || checkAccessibility(showPrompt: false)
+        ble.recoverAfterPermissionChangeIfNeeded()
+        guard !accessibilityTrusted || ble.needsPermissionRecovery else {
+            permissionRecoveryTimer?.invalidate()
+            permissionRecoveryTimer = nil
+            return
+        }
+        guard permissionRecoveryTimer == nil else { return }
+        permissionRecoveryTimer = Timer.scheduledTimer(withTimeInterval: 2, repeats: true, block: { _ in
+            self.refreshPermissionRecovery()
+        })
+        if let timer = permissionRecoveryTimer {
+            RunLoop.main.add(timer, forMode: .common)
+        }
+    }
+
+    func startPermissionRecovery(promptAccessibility: Bool) {
+        if requiresAccessibilityPermission() {
+            _ = checkAccessibility(showPrompt: promptAccessibility)
+        }
+        refreshPermissionRecovery()
     }
 
     func launcherBundleIdentifier() -> String {
@@ -1218,7 +1294,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenuItemVa
         if prefs.bool(forKey: "launchAtLogin") {
             _ = setLaunchAtLogin(true, showErrors: false)
         }
-        checkAccessibility()
+        startPermissionRecovery(promptAccessibility: true)
         checkUpdate()
 
         // Hide dock icon.
@@ -1226,7 +1302,13 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenuItemVa
         // otherwise CBCentralManager.scanForPeripherals won't work.
         NSApp.setActivationPolicy(.accessory)
     }
+
+    func applicationDidBecomeActive(_ notification: Notification) {
+        refreshPermissionRecovery()
+    }
     
     func applicationWillTerminate(_ aNotification: Notification) {
+        permissionRecoveryTimer?.invalidate()
+        permissionRecoveryTimer = nil
     }
 }

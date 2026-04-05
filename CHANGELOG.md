@@ -1,5 +1,22 @@
 # Changelog
 
+## 1.13.1
+
+- Reduced aggressive display wake retries around sleep/wake transitions to avoid getting stuck in a half-wake display state.
+- Added automatic recovery after required permissions are granted, so BLEUnlock can resume work without forcing an app restart.
+- Fixed temporary mismatches between the menu bar summary and the monitored device list when scan cache entries expire.
+- Refined the monitored-device summary text to show the detected count and strongest RSSI more clearly.
+
+<details>
+<summary>中文更新日志</summary>
+
+- 收紧了睡眠/唤醒边界上的亮屏重试逻辑，避免显示器卡在“被唤醒但没有真正点亮”的半唤醒状态。
+- 在授予所需权限后新增了自动恢复流程，避免应用陷入“必须重启才能恢复”的循环。
+- 修复了扫描缓存过期时，菜单栏摘要与受监控设备列表短暂显示不一致的问题。
+- 优化了受监控设备的摘要文案，更直观地显示已检测设备数量和当前最强 RSSI。
+
+</details>
+
 ## 1.13.0
 
 - Added support for monitoring multiple BLE devices at the same time, with configurable unlock and lock logic.

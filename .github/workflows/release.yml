@@ -4,6 +4,11 @@ on:
   push:
     tags:
       - "*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Existing git tag to build and release"
+        required: true
 
 permissions:
   contents: write
@@ -11,10 +16,14 @@ permissions:
 jobs:
   build-and-release:
     runs-on: macos-latest
+    env:
+      RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.tag || github.ref_name }}
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && format('refs/tags/{0}', github.event.inputs.tag) || github.ref }}
 
       - name: Build Release App
         run: |
@@ -29,13 +38,19 @@ jobs:
       - name: Package App
         run: |
           cd build/Build/Products/Release
-          ditto -c -k --keepParent BLEUnlock.app BLEUnlock-${GITHUB_REF_NAME}.zip
+          ditto -c -k --keepParent BLEUnlock.app BLEUnlock-${RELEASE_TAG}.zip
 
-      - name: Create GitHub Release
+      - name: Create or Update GitHub Release
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          gh release create "${GITHUB_REF_NAME}" \
-            "build/Build/Products/Release/BLEUnlock-${GITHUB_REF_NAME}.zip" \
-            --title "${GITHUB_REF_NAME}" \
-            --notes-file CHANGELOG.md
+          ASSET_PATH="build/Build/Products/Release/BLEUnlock-${RELEASE_TAG}.zip"
+          if gh release view "${RELEASE_TAG}" >/dev/null 2>&1; then
+            gh release upload "${RELEASE_TAG}" "${ASSET_PATH}" --clobber
+            gh release edit "${RELEASE_TAG}" --title "${RELEASE_TAG}" --notes-file CHANGELOG.md
+          else
+            gh release create "${RELEASE_TAG}" \
+              "${ASSET_PATH}" \
+              --title "${RELEASE_TAG}" \
+              --notes-file CHANGELOG.md
+          fi

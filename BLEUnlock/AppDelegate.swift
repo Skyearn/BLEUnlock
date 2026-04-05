@@ -357,13 +357,16 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenuItemVa
         ensureMonitoredDeviceMenuItems()
         var staleUUIDs: [UUID] = []
         for (uuid, menuItem) in deviceDict {
-            menuItem.state = ble.isMonitoring(uuid: uuid) ? .on : .off
+            let monitoring = ble.isMonitoring(uuid: uuid)
+            menuItem.state = monitoring ? .on : .off
             if let device = ble.devices[uuid] {
-                if let checkbox = deviceCheckboxDict[uuid] {
+                if !monitoring && !device.isVisible {
+                    staleUUIDs.append(uuid)
+                } else if let checkbox = deviceCheckboxDict[uuid] {
                     updateDeviceCheckbox(checkbox, uuid: uuid, title: menuItemTitle(device: device))
                 }
             } else if let checkbox = deviceCheckboxDict[uuid] {
-                if ble.isMonitoring(uuid: uuid) {
+                if monitoring {
                     let title: String
                     if let rssi = displayedRSSI(for: uuid) {
                         title = menuItemTitle(title: monitoredDeviceTitle(uuid: uuid), rssi: rssi)

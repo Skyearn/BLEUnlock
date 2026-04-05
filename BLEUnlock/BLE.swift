@@ -61,6 +61,26 @@ class Device: NSObject {
         return candidate
     }
 
+    func looksLikeTemporaryBroadcastName(_ candidate: String) -> Bool {
+        if candidate == "N/A" {
+            return true
+        }
+        if candidate.count >= 12 && candidate.contains("/") && !candidate.contains(" ") {
+            return true
+        }
+
+        if candidate.count < 16 {
+            return false
+        }
+
+        let hasUpper = candidate.rangeOfCharacter(from: .uppercaseLetters) != nil
+        let hasLower = candidate.rangeOfCharacter(from: .lowercaseLetters) != nil
+        let hasDigit = candidate.rangeOfCharacter(from: .decimalDigits) != nil
+        let allowed = CharacterSet.alphanumerics.union(CharacterSet(charactersIn: "-_/"))
+        let onlySimpleCharacters = candidate.rangeOfCharacter(from: allowed.inverted) == nil
+        return onlySimpleCharacters && ((hasUpper && hasLower) || (hasUpper && hasDigit) || (hasLower && hasDigit))
+    }
+
     func isGenericAppleName(_ name: String) -> Bool {
         name == "iPhone" || name == "iPad"
     }
@@ -72,12 +92,31 @@ class Device: NSObject {
         }
     }
 
+    func updateAdvertisedNameIfNeeded(_ candidate: String?) {
+        guard let candidate = normalizedName(candidate) else { return }
+        if looksLikeTemporaryBroadcastName(candidate),
+           let peripheralName = normalizedName(peripheral?.name),
+           peripheralName != candidate {
+            return
+        }
+        updateNameIfNeeded(candidate)
+    }
+
     func currentResolvedName() -> String? {
+        let peripheralName = normalizedName(peripheral?.name)
+        if let cachedName = normalizedName(blName),
+           looksLikeTemporaryBroadcastName(cachedName),
+           let peripheralName,
+           peripheralName != cachedName {
+            blName = peripheralName
+            return peripheralName
+        }
+
         if let name = normalizedName(blName) {
             return name
         }
 
-        if let name = normalizedName(peripheral?.name) {
+        if let name = peripheralName {
             blName = name
             return name
         }
@@ -605,7 +644,7 @@ class BLE: NSObject, CBCentralManagerDelegate, CBPeripheralDelegate {
                     device.isVisible = true
                     device.advData = advertisementData[CBAdvertisementDataManufacturerDataKey] as? Data
                     device.advertisedLocalName = device.normalizedName(advertisementData[CBAdvertisementDataLocalNameKey] as? String)
-                    device.updateNameIfNeeded(device.advertisedLocalName)
+                    device.updateAdvertisedNameIfNeeded(device.advertisedLocalName)
                     devices[peripheral.identifier] = device
                     central.connect(peripheral, options: nil)
                     device.logNameResolutionIfNeeded(context: "discover:new")
@@ -618,7 +657,7 @@ class BLE: NSObject, CBCentralManagerDelegate, CBPeripheralDelegate {
                 device.isVisible = true
                 device.advData = advertisementData[CBAdvertisementDataManufacturerDataKey] as? Data ?? device.advData
                 device.advertisedLocalName = device.normalizedName(advertisementData[CBAdvertisementDataLocalNameKey] as? String) ?? device.advertisedLocalName
-                device.updateNameIfNeeded(device.advertisedLocalName)
+                device.updateAdvertisedNameIfNeeded(device.advertisedLocalName)
                 device.logNameResolutionIfNeeded(context: "discover:update")
                 delegate?.updateDevice(device: device)
             }

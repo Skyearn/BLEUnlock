@@ -420,7 +420,7 @@ Included icons are derived from SVGs downloaded from materialdesignicons.com. Th
                     </button>
                     <button verticalHuggingPriority="750" translatesAutoresizingMaskIntoConstraints="NO" id="AHV-DJ-ucE">
                         <rect key="frame" x="297" y="13" width="130" height="32"/>
-                        <buttonCell key="cell" type="push" title="Fork Releases" bezelStyle="rounded" alignment="center" borderStyle="border" imageScaling="proportionallyDown" inset="2" id="WIg-Gy-UeI">
+                        <buttonCell key="cell" type="push" title="Release Notes" bezelStyle="rounded" alignment="center" borderStyle="border" imageScaling="proportionallyDown" inset="2" id="WIg-Gy-UeI">
                             <behavior key="behavior" pushIn="YES" lightByBackground="YES" lightByGray="YES"/>
                             <font key="font" metaFont="system"/>
                         </buttonCell>

@@ -13,7 +13,7 @@ func checkUpdate() {
 }
 
 private func doCheckUpdate() {
-    var request = URLRequest(url: URL(string: "https://api.github.com/repos/ts1/BLEUnlock/releases/latest")!)
+    var request = URLRequest(url: URL(string: "https://api.github.com/repos/Skyearn/BLEUnlock/releases/latest")!)
     request.cachePolicy = .reloadIgnoringLocalAndRemoteCacheData
     let task = URLSession.shared.dataTask(with: request, completionHandler: { data, response, error in
         if let jsondata = data {
@@ -31,9 +31,17 @@ private func doCheckUpdate() {
     task.resume()
 }
 
+private func normalizedVersion(_ version: String) -> String {
+    let trimmed = version.trimmingCharacters(in: .whitespacesAndNewlines)
+    if trimmed.lowercased().hasPrefix("v") {
+        return String(trimmed.dropFirst())
+    }
+    return trimmed
+}
+
 private func compareVersionsAndNotify(_ latestVersion: String) {
     if let version = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String {
-        if version != latestVersion {
+        if normalizedVersion(version) != normalizedVersion(latestVersion) {
             notify()
             notified = true
         }

@@ -10,7 +10,7 @@ class AboutBox: NSWindowController, NSWindowDelegate {
     }
 
     @IBAction func checkReleases(_ sender: Any) {
-        NSWorkspace.shared.open(URL(string: "https://github.com/Skyearn/BLEUnlock/releases")!)
+        NSWorkspace.shared.open(URL(string: "https://github.com/Skyearn/BLEUnlock/blob/master/CHANGELOG.md")!)
     }
     convenience init() {
         self.init(windowNibName: "AboutBox")

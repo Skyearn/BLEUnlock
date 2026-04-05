@@ -1,4 +1,4 @@
-# Changelog
+# Release Notes
 
 ## 1.13.1
 
@@ -8,7 +8,7 @@
 - Refined the monitored-device summary text to show the detected count and strongest RSSI more clearly.
 
 <details>
-<summary>中文更新日志</summary>
+<summary>中文发布说明</summary>
 
 - 收紧了睡眠/唤醒边界上的亮屏重试逻辑，避免显示器卡在“被唤醒但没有真正点亮”的半唤醒状态。
 - 在授予所需权限后新增了自动恢复流程，避免应用陷入“必须重启才能恢复”的循环。
@@ -27,7 +27,7 @@
 - Added a Simplified Chinese README and linked it from the English documentation.
 
 <details>
-<summary>中文更新日志</summary>
+<summary>中文发布说明</summary>
 
 - 新增了同时监控多台 BLE 设备的支持，并可分别配置解锁逻辑与锁定逻辑。
 - 改进了从睡眠唤醒后的自动解锁可靠性：现在会等待锁屏界面准备就绪，并在首次输入密码时机过早的情况下自动重试。

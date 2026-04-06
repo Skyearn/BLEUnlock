@@ -132,7 +132,12 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenuItemVa
     var permissionRecoveryTimer: Timer?
     var lastWakeAt = 0.0
     var lastDisplayWakeRequestAt = 0.0
+    var lastSystemSleepStartedAt = 0.0
+    var lastScreensaverStartedAt = 0.0
     let minimumWakeRequestInterval = 15.0
+    let conservativeWakeSleepThreshold = 60.0
+    let conservativeWakeUnlockDelay = 1.5
+    let screensaverEscapeRetryDelay = 0.35
     let wakeUnlockRetryDelay = 0.5
     let wakeUnlockMaxRetries = 8
 
@@ -649,6 +654,18 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenuItemVa
         }
         return false
     }
+
+    func recentlyWoke() -> Bool {
+        Date().timeIntervalSince1970 - lastWakeAt < 5
+    }
+
+    func conservativeWakeUnlockNeeded() -> Bool {
+        guard recentlyWoke() else { return false }
+        let now = Date().timeIntervalSince1970
+        let sleepReference = max(lastSystemSleepStartedAt, lastScreensaverStartedAt)
+        guard sleepReference > 0 else { return false }
+        return now - sleepReference >= conservativeWakeSleepThreshold
+    }
     
     func tryUnlockScreen(retryCount: Int = 0) {
         guard !manualLock else { return }
@@ -657,11 +674,16 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenuItemVa
         guard !systemSleep else { return }
         guard !displaySleep else { return }
         guard !self.prefs.bool(forKey: "wakeWithoutUnlocking") else { return }
-        let recentlyWoke = Date().timeIntervalSince1970 - lastWakeAt < 5
+        let recentlyWoke = recentlyWoke()
+        let conservativeWakeUnlock = conservativeWakeUnlockNeeded()
 
-        if inScreensaver {
-            // Make sure the login panel is ready to receive keystrokes.
+        if inScreensaver && !recentlyWoke && retryCount == 0 {
+            // Only dismiss a live screensaver outside the fragile wake window.
             sendEscapeKey()
+            scheduleWakeUnlock(after: screensaverEscapeRetryDelay, retryCount: retryCount + 1)
+            return
+        } else if inScreensaver && recentlyWoke {
+            print("Skipping Escape key during wake recovery")
         }
 
         guard isScreenLocked() else {
@@ -671,7 +693,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenuItemVa
             return
         }
 
-        let unlockDelay = recentlyWoke ? 0.75 : 0.5
+        let unlockDelay = conservativeWakeUnlock ? conservativeWakeUnlockDelay : (recentlyWoke ? 0.75 : 0.5)
         wakeUnlockTimer?.invalidate()
         wakeUnlockTimer = Timer.scheduledTimer(withTimeInterval: unlockDelay, repeats: false, block: { _ in
             self.wakeUnlockTimer = nil
@@ -692,7 +714,8 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenuItemVa
             // On wake, the first attempt can land before the login UI is fully ready.
             if (recentlyWoke || self.inScreensaver) && retryCount < self.wakeUnlockMaxRetries {
                 self.postUnlockRetryTimer?.invalidate()
-                self.postUnlockRetryTimer = Timer.scheduledTimer(withTimeInterval: 1.5, repeats: false, block: { _ in
+                let retryDelay = conservativeWakeUnlock ? 2.0 : 1.5
+                self.postUnlockRetryTimer = Timer.scheduledTimer(withTimeInterval: retryDelay, repeats: false, block: { _ in
                     self.postUnlockRetryTimer = nil
                     guard self.isScreenLocked() else { return }
                     self.scheduleWakeUnlock(after: self.wakeUnlockRetryDelay, retryCount: retryCount + 1)
@@ -741,6 +764,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenuItemVa
             print("delayed system wake job")
             NSApp.setActivationPolicy(.accessory) // Hide Dock icon again
             self.systemSleep = false
+            self.ble.resumeMonitoringAfterSystemWake()
             self.lastWakeAt = Date().timeIntervalSince1970
             self.scheduleWakeUnlock(after: 1.0)
         })
@@ -749,7 +773,9 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenuItemVa
     @objc func onSystemSleep() {
         print("system sleep")
         systemSleep = true
+        lastSystemSleepStartedAt = Date().timeIntervalSince1970
         cancelWakeRelatedTimers()
+        ble.suspendMonitoringForSystemSleep()
         // Set activation policy to regular, so the CBCentralManager can scan for peripherals
         // when the Bluetooth will become on again.
         // This enables Dock icon but the screen is off anyway.
@@ -758,6 +784,9 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenuItemVa
 
     @objc func onUnlock() {
         cancelWakeRelatedTimers()
+        inScreensaver = false
+        lastSystemSleepStartedAt = 0
+        lastScreensaverStartedAt = 0
         Timer.scheduledTimer(withTimeInterval: 2, repeats: false, block: { _ in
             print("onUnlock")
             if Date().timeIntervalSince1970 >= self.unlockedAt + 10 {
@@ -776,11 +805,13 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenuItemVa
     @objc func onScreensaverStart() {
         print("screensaver start")
         inScreensaver = true
+        lastScreensaverStartedAt = Date().timeIntervalSince1970
     }
 
     @objc func onScreensaverStop() {
         print("screensaver stop")
         inScreensaver = false
+        lastScreensaverStartedAt = 0
     }
 
     @objc func toggleDeviceCheckbox(_ sender: NSButton) {

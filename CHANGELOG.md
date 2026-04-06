@@ -1,5 +1,20 @@
 # Release Notes
 
+## 1.13.2
+
+- Reduced BLE scan, connection, and RSSI polling activity during the system sleep transition to lower the chance of the Mac waking immediately after being put to sleep.
+- Resume BLE monitoring automatically after the system wakes, while keeping normal proximity detection and unlock behavior intact.
+- Preserved wake-on-proximity behavior for display sleep without letting the app keep aggressively probing devices at the system sleep boundary.
+
+<details>
+<summary>中文发布说明</summary>
+
+- 收紧了系统进入睡眠前后的 BLE 扫描、连接与 RSSI 轮询行为，降低 Mac 刚睡下去就被再次唤醒的概率。
+- 在系统唤醒后自动恢复 BLE 监控，同时保持正常的设备检测与解锁流程。
+- 保留了显示器休眠场景下的靠近唤醒能力，但避免应用在整机睡眠边界继续激进探测设备。
+
+</details>
+
 ## 1.13.1
 
 - Reduced aggressive display wake retries around sleep/wake transitions to avoid getting stuck in a half-wake display state.

@@ -1,5 +1,5 @@
 import Cocoa
-import Quartz
+import CoreGraphics
 import ServiceManagement
 import UserNotifications
 

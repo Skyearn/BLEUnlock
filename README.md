@@ -138,10 +138,11 @@ On the other hand, in order for BLEUnlock to track your device, its MAC address 
 
 Fortunately, on Apple devices, if you are signed in with the same Apple ID as your Mac, the MAC address is resolved to the true (public) address.
 
-For other devices, including Android, the way to resolve the address is unknown.
-If your non-Apple device changes its MAC address over time, unfortunately BLEUnlock can't support it.
+If a device uses rotating private addresses, you can also try pairing it with your Mac once in *System Settings* > *Bluetooth* (or *System Preferences* > *Bluetooth* on older macOS versions). After the device is connected and trusted by the system, macOS may keep recognizing it more consistently, and BLEUnlock may then see a stable identity as well.
 
-To check if the MAC address is resolved correctly, compare the MAC address displayed in the *Device* scan list of BLEUnlock with the one that is displayed on your device.
+This is only a workaround that is worth trying. It worked with my RedMagic phone, but I cannot guarantee that every device using rotating private addresses will be supported reliably.
+
+Pairing itself usually has little effect on battery life. The bigger battery impact comes from frequent active Bluetooth connections or polling, not from the one-time pairing step.
 
 ## Run script on lock/unlock
 

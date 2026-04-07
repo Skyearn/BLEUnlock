@@ -4,11 +4,12 @@
 
 ![CI](https://github.com/Skyearn/BLEUnlock/workflows/CI/badge.svg)
 ![Github All Releases](https://img.shields.io/github/downloads/Skyearn/BLEUnlock/total.svg)
-[![Buy me a coffee](img/buymeacoffee.svg)](https://www.buymeacoffee.com/tsone)
 
 BLEUnlock is a small menu bar utility that locks and unlocks your Mac by proximity of your iPhone, Apple Watch, or any other Bluetooth Low Energy device.
 
 This document is also available in [Japanese (日本語版はこちら)](README.ja.md) and [Simplified Chinese (简体中文)](README.cn.md).
+
+> This repository is a fork of the original [ts1/BLEUnlock](https://github.com/ts1/BLEUnlock), created by Takeshi Sone. Many thanks to Takeshi Sone for open-sourcing BLEUnlock under the MIT license, and to all contributors who made the original project possible.
 
 ## Features
 
@@ -38,6 +39,17 @@ This document is also available in [Japanese (日本語版はこちら)](README.
 ### Manual installation
 
 Download the zip file from [Releases](https://github.com/Skyearn/BLEUnlock/releases), unzip and move to the Applications folder.
+
+> NOTE: This fork is not enrolled in the Apple Developer Program, so release builds cannot be distributed with Apple Developer ID signing and notarization. macOS may therefore block the app on first launch.
+>
+> If macOS prevents BLEUnlock from opening:
+> 1. Move `BLEUnlock.app` to `/Applications`.
+> 2. Control-click the app and choose **Open**.
+> 3. If it is still blocked, open **System Settings** -> **Privacy & Security**, scroll down, and click **Open Anyway** for BLEUnlock.
+> 4. Launch the app again and confirm **Open**.
+> 5. After the app starts, grant the requested Bluetooth, Accessibility, Keychain, and Notification permissions.
+>
+> To reduce repeated permission prompts when updating, replace the existing `/Applications/BLEUnlock.app` instead of running copies from different folders.
 
 ## Setting up
 
@@ -203,14 +215,15 @@ do shell script "/usr/local/bin/ffmpeg -f avfoundation -r 30 -i 0 -frames:v 1 -y
 This app is required because BLEUnlock does not have Camera permission.
 Giving permission to this app resolves the problem.
 
-## Funding
+## Fork Origin
 
-The annual Apple Developer Program fee is funded by donations.
+This fork is based on the original [ts1/BLEUnlock](https://github.com/ts1/BLEUnlock) by Takeshi Sone and continues development in this repository for its own releases and changes.
 
-If you like this app, I'd appreciate it if you could make a donation via [Buy Me a Coffee](https://www.buymeacoffee.com/tsone) or [PayPal Me](https://www.paypal.com/paypalme/my/profile) so I can keep up.
+Thank you to Takeshi Sone for the original project, and to everyone who contributed fixes, translations, and ideas over time.
 
 ## Credits
 
+- [Takeshi Sone](https://github.com/ts1): Original BLEUnlock author and project foundation
 - [peiit](https://github.com/peiit): Chinese translation
 - [wenmin-wu](https://github.com/wenmin-wu): Minimum RSSI and moving average
 - [stephengroat](https://github.com/stephengroat): CI

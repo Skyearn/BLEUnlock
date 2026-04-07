@@ -4,11 +4,12 @@
 
 ![CI](https://github.com/Skyearn/BLEUnlock/workflows/CI/badge.svg)
 ![Github All Releases](https://img.shields.io/github/downloads/Skyearn/BLEUnlock/total.svg)
-[![Buy me a coffee](img/buymeacoffee.svg)](https://www.buymeacoffee.com/tsone)
 
 BLEUnlock 是一款常驻菜单栏的小工具，可以根据 iPhone、Apple Watch 或其他蓝牙低功耗设备与 Mac 的距离，自动锁定或解锁 Mac。
 
 本文档也提供 [English](README.md) 和 [Japanese (日本語)](README.ja.md) 版本。
+
+> 本仓库是原始项目 [ts1/BLEUnlock](https://github.com/ts1/BLEUnlock) 的 fork，原项目由 Takeshi Sone 创建。感谢 Takeshi Sone 以 MIT 协议开源 BLEUnlock，也感谢所有为原项目贡献代码、翻译和想法的贡献者。
 
 ## 功能
 
@@ -38,6 +39,17 @@ BLEUnlock 是一款常驻菜单栏的小工具，可以根据 iPhone、Apple Wat
 ### 手动安装
 
 从 [Releases](https://github.com/Skyearn/BLEUnlock/releases) 下载 zip 文件，解压后拖到“应用程序”文件夹。
+
+> 注意：这个 fork 没有加入 Apple Developer Program，因此发布版本无法使用 Apple Developer ID 进行分发签名和公证。首次启动时，macOS 可能会拦截应用。
+>
+> 如果系统阻止 BLEUnlock 打开，请按下面的流程处理：
+> 1. 先将 `BLEUnlock.app` 移动到 `/Applications`。
+> 2. 按住 Control 点击应用，选择 **打开**。
+> 3. 如果仍被拦截，打开 **系统设置** -> **隐私与安全性**，滚动到页面底部，对 BLEUnlock 点击 **仍要打开**。
+> 4. 再次启动应用，并在弹窗中确认 **打开**。
+> 5. 应用启动后，再按提示授予蓝牙、辅助功能、钥匙串和通知等权限。
+>
+> 为了尽量减少更新后的重复授权，请始终覆盖 `/Applications/BLEUnlock.app`，不要从不同目录运行多个副本。
 
 ## 初次设置
 
@@ -201,14 +213,15 @@ do shell script "/usr/local/bin/ffmpeg -f avfoundation -r 30 -i 0 -frames:v 1 -y
 之所以需要这个 app，是因为 BLEUnlock 本身没有相机权限。
 把相机权限授予这个 app，就可以绕过这个限制。
 
-## 资助
+## Fork 来源
 
-Apple Developer Program 的年费由捐助承担。
+这个 fork 基于 Takeshi Sone 的原始项目 [ts1/BLEUnlock](https://github.com/ts1/BLEUnlock)，并在当前仓库中继续维护、发布和进行功能调整。
 
-如果你喜欢这个应用，欢迎通过 [Buy Me a Coffee](https://www.buymeacoffee.com/tsone) 或 [PayPal Me](https://www.paypal.com/paypalme/my/profile) 进行捐助，帮助项目持续维护。
+感谢 Takeshi Sone 打下的项目基础，也感谢所有长期贡献修复、本地化和使用反馈的贡献者。
 
 ## 致谢
 
+- [Takeshi Sone](https://github.com/ts1): BLEUnlock 原作者与项目基础
 - [peiit](https://github.com/peiit): 中文翻译
 - [wenmin-wu](https://github.com/wenmin-wu): 最小 RSSI 和移动平均
 - [stephengroat](https://github.com/stephengroat): CI

@@ -679,9 +679,10 @@ class BLE: NSObject, CBCentralManagerDelegate, CBPeripheralDelegate {
             }
             let dev = devices[peripheral.identifier]
             var device: Device
+            let shouldTrackDiscoveredDevice = rssi >= thresholdRSSI || isMonitoring(uuid: peripheral.identifier)
             if (dev == nil) {
                 device = Device(uuid: peripheral.identifier)
-                if (rssi >= thresholdRSSI) {
+                if shouldTrackDiscoveredDevice {
                     device.peripheral = peripheral
                     device.rssi = rssi
                     device.isVisible = true

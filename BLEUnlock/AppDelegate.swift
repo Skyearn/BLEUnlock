@@ -11,6 +11,10 @@ private let lockNotificationID = "jp.sone.BLEUnlock.lock"
 private let updateNotificationID = "jp.sone.BLEUnlock.update"
 private let notificationKindKey = "kind"
 private let launcherBundleIDSuffix = ".Launcher"
+private let unlockLogicMenuItemKind = "unlockLogic"
+private let lockLogicMenuItemKind = "lockLogic"
+private let unlockRSSIMenuItemKind = "unlockRSSI"
+private let lockRSSIMenuItemKind = "lockRSSI"
 
 private enum AppNotificationKind: String {
     case lock
@@ -101,10 +105,8 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenuItemVa
     let ble = BLE()
     let mainMenu = NSMenu()
     let deviceMenu = NSMenu()
-    let unlockDeviceLogicMenu = NSMenu()
-    let lockDeviceLogicMenu = NSMenu()
-    let lockRSSIMenu = NSMenu()
-    let unlockRSSIMenu = NSMenu()
+    let unlockSettingsMenu = NSMenu()
+    let lockSettingsMenu = NSMenu()
     let timeoutMenu = NSMenu()
     let lockDelayMenu = NSMenu()
     var deviceDict: [UUID: NSMenuItem] = [:]
@@ -148,30 +150,18 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenuItemVa
             deviceMenuNeedsRefresh = false
             deviceMenuIsOpen = true
             ble.startScanning()
-        } else if menu == unlockDeviceLogicMenu {
-            for item in menu.items {
-                item.state = item.tag == ble.unlockDeviceLogic.rawValue ? .on : .off
-            }
-        } else if menu == lockDeviceLogicMenu {
-            for item in menu.items {
-                item.state = item.tag == ble.lockDeviceLogic.rawValue ? .on : .off
-            }
-        } else if menu == lockRSSIMenu {
-            for item in menu.items {
-                if item.tag == ble.lockRSSI {
-                    item.state = .on
-                } else {
-                    item.state = .off
-                }
-            }
-        } else if menu == unlockRSSIMenu {
-            for item in menu.items {
-                if item.tag == ble.unlockRSSI {
-                    item.state = .on
-                } else {
-                    item.state = .off
-                }
-            }
+        } else if menu == unlockSettingsMenu {
+            updateSettingsMenu(menu,
+                               logicKind: unlockLogicMenuItemKind,
+                               selectedLogic: ble.unlockDeviceLogic.rawValue,
+                               rssiKind: unlockRSSIMenuItemKind,
+                               selectedRSSI: ble.unlockRSSI)
+        } else if menu == lockSettingsMenu {
+            updateSettingsMenu(menu,
+                               logicKind: lockLogicMenuItemKind,
+                               selectedLogic: ble.lockDeviceLogic.rawValue,
+                               rssiKind: lockRSSIMenuItemKind,
+                               selectedRSSI: ble.lockRSSI)
         } else if menu == timeoutMenu {
             for item in menu.items {
                 if item.tag == Int(ble.signalTimeout) {
@@ -192,10 +182,16 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenuItemVa
     }
 
     func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
-        if menuItem.menu == lockRSSIMenu {
-            return menuItem.tag <= ble.unlockRSSI
-        } else if menuItem.menu == unlockRSSIMenu {
-            return menuItem.tag >= ble.lockRSSI
+        if let kind = menuItem.representedObject as? String {
+            if kind == unlockLogicMenuItemKind || kind == lockLogicMenuItemKind {
+                return ble.monitoredUUIDs.count > 1
+            }
+            if kind == lockRSSIMenuItemKind {
+                return menuItem.tag <= ble.unlockRSSI
+            }
+            if kind == unlockRSSIMenuItemKind {
+                return menuItem.tag >= ble.lockRSSI
+            }
         }
         return true
     }
@@ -835,6 +831,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenuItemVa
         statusItem.button?.image = NSImage(named: "StatusBarDisconnected")
         ble.startMonitor(uuids: uuids)
         refreshDeviceMenuSelectionStates()
+        refreshSettingsMenus()
         refreshMonitorStatusItems()
     }
 
@@ -1032,13 +1029,68 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenuItemVa
         AboutBox.showAboutBox()
     }
 
-    func constructRSSIMenu(_ menu: NSMenu, _ action: Selector) {
+    func updateSettingsMenu(_ menu: NSMenu, logicKind: String, selectedLogic: Int, rssiKind: String, selectedRSSI: Int) {
+        let logicEnabled = ble.monitoredUUIDs.count > 1
+        for item in menu.items {
+            guard let kind = item.representedObject as? String else {
+                item.state = .off
+                continue
+            }
+
+            if kind == logicKind {
+                item.state = item.tag == selectedLogic ? .on : .off
+                item.isEnabled = logicEnabled
+            } else if kind == rssiKind {
+                item.state = item.tag == selectedRSSI ? .on : .off
+                if kind == lockRSSIMenuItemKind {
+                    item.isEnabled = item.tag <= ble.unlockRSSI
+                } else if kind == unlockRSSIMenuItemKind {
+                    item.isEnabled = item.tag >= ble.lockRSSI
+                }
+            } else {
+                item.state = .off
+            }
+        }
+    }
+
+    func refreshSettingsMenus() {
+        updateSettingsMenu(unlockSettingsMenu,
+                           logicKind: unlockLogicMenuItemKind,
+                           selectedLogic: ble.unlockDeviceLogic.rawValue,
+                           rssiKind: unlockRSSIMenuItemKind,
+                           selectedRSSI: ble.unlockRSSI)
+        updateSettingsMenu(lockSettingsMenu,
+                           logicKind: lockLogicMenuItemKind,
+                           selectedLogic: ble.lockDeviceLogic.rawValue,
+                           rssiKind: lockRSSIMenuItemKind,
+                           selectedRSSI: ble.lockRSSI)
+        unlockSettingsMenu.update()
+        lockSettingsMenu.update()
+    }
+
+    @discardableResult
+    func addSettingsItem(_ menu: NSMenu, title: String, action: Selector, tag: Int, kind: String) -> NSMenuItem {
+        let item = menu.addItem(withTitle: title, action: action, keyEquivalent: "")
+        item.tag = tag
+        item.representedObject = kind
+        return item
+    }
+
+    func constructRSSISection(_ menu: NSMenu, _ action: Selector, kind: String, disabledTag: Int, disabledFirst: Bool) {
+        if disabledFirst {
+            addSettingsItem(menu, title: t("disabled"), action: action, tag: disabledTag, kind: kind)
+        }
+
         menu.addItem(withTitle: t("closer"), action: nil, keyEquivalent: "")
         for proximity in stride(from: -30, to: -100, by: -5) {
-            let item = menu.addItem(withTitle: String(format: "%ddBm", proximity), action: action, keyEquivalent: "")
-            item.tag = proximity
+            addSettingsItem(menu, title: String(format: "%ddBm", proximity), action: action, tag: proximity, kind: kind)
         }
         menu.addItem(withTitle: t("farther"), action: nil, keyEquivalent: "")
+
+        if !disabledFirst {
+            addSettingsItem(menu, title: t("disabled"), action: action, tag: disabledTag, kind: kind)
+        }
+
         menu.delegate = self
     }
     
@@ -1056,33 +1108,27 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenuItemVa
         deviceMenu.delegate = self
         deviceMenu.addItem(withTitle: t("scanning"), action: nil, keyEquivalent: "")
 
-        let unlockDeviceLogicItem = mainMenu.addItem(withTitle: t("unlock_device_logic"), action: nil, keyEquivalent: "")
-        unlockDeviceLogicItem.submenu = unlockDeviceLogicMenu
-        unlockDeviceLogicMenu.delegate = self
-        item = unlockDeviceLogicMenu.addItem(withTitle: t("unlock_device_logic_any_close"), action: #selector(setUnlockDeviceLogic), keyEquivalent: "")
-        item.tag = UnlockDeviceLogic.anyClose.rawValue
-        item = unlockDeviceLogicMenu.addItem(withTitle: t("unlock_device_logic_all_close"), action: #selector(setUnlockDeviceLogic), keyEquivalent: "")
-        item.tag = UnlockDeviceLogic.allClose.rawValue
+        let unlockSettingsItem = mainMenu.addItem(withTitle: t("unlock_settings"), action: nil, keyEquivalent: "")
+        unlockSettingsItem.submenu = unlockSettingsMenu
+        addSettingsItem(unlockSettingsMenu, title: t("any_short"), action: #selector(setUnlockDeviceLogic), tag: UnlockDeviceLogic.anyClose.rawValue, kind: unlockLogicMenuItemKind)
+        addSettingsItem(unlockSettingsMenu, title: t("all_short"), action: #selector(setUnlockDeviceLogic), tag: UnlockDeviceLogic.allClose.rawValue, kind: unlockLogicMenuItemKind)
+        unlockSettingsMenu.addItem(NSMenuItem.separator())
+        constructRSSISection(unlockSettingsMenu,
+                             #selector(setUnlockRSSI),
+                             kind: unlockRSSIMenuItemKind,
+                             disabledTag: ble.UNLOCK_DISABLED,
+                             disabledFirst: true)
 
-        let lockDeviceLogicItem = mainMenu.addItem(withTitle: t("lock_device_logic"), action: nil, keyEquivalent: "")
-        lockDeviceLogicItem.submenu = lockDeviceLogicMenu
-        lockDeviceLogicMenu.delegate = self
-        item = lockDeviceLogicMenu.addItem(withTitle: t("lock_device_logic_all_away"), action: #selector(setLockDeviceLogic), keyEquivalent: "")
-        item.tag = LockDeviceLogic.allAway.rawValue
-        item = lockDeviceLogicMenu.addItem(withTitle: t("lock_device_logic_any_away"), action: #selector(setLockDeviceLogic), keyEquivalent: "")
-        item.tag = LockDeviceLogic.anyAway.rawValue
-
-        let unlockRSSIItem = mainMenu.addItem(withTitle: t("unlock_rssi"), action: nil, keyEquivalent: "")
-        unlockRSSIItem.submenu = unlockRSSIMenu
-        item = unlockRSSIMenu.addItem(withTitle: t("disabled"), action: #selector(setUnlockRSSI), keyEquivalent: "")
-        item.tag = ble.UNLOCK_DISABLED
-        constructRSSIMenu(unlockRSSIMenu, #selector(setUnlockRSSI))
-
-        let lockRSSIItem = mainMenu.addItem(withTitle: t("lock_rssi"), action: nil, keyEquivalent: "")
-        lockRSSIItem.submenu = lockRSSIMenu
-        constructRSSIMenu(lockRSSIMenu, #selector(setLockRSSI))
-        item = lockRSSIMenu.addItem(withTitle: t("disabled"), action: #selector(setLockRSSI), keyEquivalent: "")
-        item.tag = ble.LOCK_DISABLED
+        let lockSettingsItem = mainMenu.addItem(withTitle: t("lock_settings"), action: nil, keyEquivalent: "")
+        lockSettingsItem.submenu = lockSettingsMenu
+        addSettingsItem(lockSettingsMenu, title: t("any_short"), action: #selector(setLockDeviceLogic), tag: LockDeviceLogic.anyAway.rawValue, kind: lockLogicMenuItemKind)
+        addSettingsItem(lockSettingsMenu, title: t("all_short"), action: #selector(setLockDeviceLogic), tag: LockDeviceLogic.allAway.rawValue, kind: lockLogicMenuItemKind)
+        lockSettingsMenu.addItem(NSMenuItem.separator())
+        constructRSSISection(lockSettingsMenu,
+                             #selector(setLockRSSI),
+                             kind: lockRSSIMenuItemKind,
+                             disabledTag: ble.LOCK_DISABLED,
+                             disabledFirst: false)
 
         let lockDelayItem = mainMenu.addItem(withTitle: t("lock_delay"), action: nil, keyEquivalent: "")
         lockDelayItem.submenu = lockDelayMenu

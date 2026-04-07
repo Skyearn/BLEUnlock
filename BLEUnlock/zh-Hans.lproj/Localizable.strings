@@ -25,9 +25,13 @@
 "lock_device_logic" = "锁定逻辑";
 "lock_device_logic_all_away" = "全部已选设备都远离才锁定";
 "lock_device_logic_any_away" = "任一已选设备远离就锁定";
+"lock_settings" = "锁定设置";
 "unlock_device_logic" = "解锁逻辑";
 "unlock_device_logic_all_close" = "全部已选设备都靠近才解锁";
 "unlock_device_logic_any_close" = "任一已选设备靠近即可解锁";
+"unlock_settings" = "解锁设置";
+"any_short" = "任一";
+"all_short" = "全部";
 "not_detected" = "未检测到信息";
 "notification_device_away" = "设备掉线";
 "notification_locked" = "本电脑已被BLEUnlock锁定";

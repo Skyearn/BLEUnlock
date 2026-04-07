@@ -21,6 +21,9 @@
 "notification_lost_signal" = "デバイスからの信号がありません";
 "notification_update_available" = "アップデートが利用可能です";
 "ok" = "OK";
+"any_short" = "いずれか";
+"all_short" = "すべて";
+"lock_settings" = "ロック設定";
 "passive_mode" = "パッシブモード";
 "password_info" = "パスワードはキーチェーンに安全に保存されます。";
 "password_not_set" = "パスワードが設定されていません。";
@@ -32,6 +35,7 @@
 "set_rssi_threshold" = "最小RSSIを設定…";
 "sleep_display" = "ロック時画面をスリープ";
 "timeout" = "無信号タイムアウト";
+"unlock_settings" = "アンロック設定";
 "unlock_rssi" = "アンロック信号強度";
 "use_screensaver_to_lock" = "スクリーンセーバーでロック";
 "wake_on_proximity" = "画面スリープから復帰";

@@ -226,7 +226,6 @@ do shell script "/usr/local/bin/ffmpeg -f avfoundation -r 30 -i 0 -frames:v 1 -y
 - [wenmin-wu](https://github.com/wenmin-wu): 最小 RSSI 和移动平均
 - [stephengroat](https://github.com/stephengroat): CI
 - [joeyhoer](https://github.com/joeyhoer): Homebrew Cask
-- [Skyearn](https://github.com/Skyearn): Big Sur 风格图标
 - [cyberclaus](https://github.com/cyberclaus): 德语、瑞典语、挪威语（Bokmål）和丹麦语本地化
 - [alonewolfx2](https://github.com/alonewolfx2): 土耳其语本地化
 - [wernjie](https://github.com/wernjie): 唤醒时不解锁

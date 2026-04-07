@@ -251,7 +251,6 @@ do shell script "/usr/local/bin/ffmpeg -f avfoundation -r 30 -i 0 -frames:v 1 -y
 - [wenmin-wu](https://github.com/wenmin-wu): 最小RSSIと移動平均
 - [stephengroat](https://github.com/stephengroat): CI
 - [joeyhoer](https://github.com/joeyhoer): Homebrew Cask
-- [Skyearn](https://github.com/Skyearn): Big Surスタイルのアイコン
 - [cyberclaus](https://github.com/cyberclaus): ドイツ語, スウェーデン語, ノルウェー語 (Bokmål) およびデンマーク語のローカリゼーション
 - [alonewolfx2](https://github.com/alonewolfx2): トルコ語のローカリゼーション
 - [wernjie](https://github.com/wernjie): アンロックせずに画面復帰

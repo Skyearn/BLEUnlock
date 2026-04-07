@@ -228,7 +228,6 @@ Thank you to Takeshi Sone for the original project, and to everyone who contribu
 - [wenmin-wu](https://github.com/wenmin-wu): Minimum RSSI and moving average
 - [stephengroat](https://github.com/stephengroat): CI
 - [joeyhoer](https://github.com/joeyhoer): Homebrew Cask
-- [Skyearn](https://github.com/Skyearn): Big Sur style icon
 - [cyberclaus](https://github.com/cyberclaus): German, Swedish, Norwegian (Bokmål) and Danish localizations
 - [alonewolfx2](https://github.com/alonewolfx2): Turkish localization
 - [wernjie](https://github.com/wernjie): Wake without Unlocking

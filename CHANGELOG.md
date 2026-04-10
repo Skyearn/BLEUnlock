@@ -1,6 +1,6 @@
 # Release Notes
 
-## 1.13.3
+## 1.13.4
 
 - Reorganized the unlock and lock controls by grouping logic and RSSI settings into `Unlock Settings` and `Lock Settings` submenus.
 - Disable the logic choices when only one device is being monitored, and refresh that state immediately after device selections change.

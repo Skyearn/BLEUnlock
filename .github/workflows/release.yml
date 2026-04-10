@@ -72,8 +72,7 @@ jobs:
 
       - name: Install create-dmg
         run: |
-          brew update
-          brew install create-dmg
+          npm install -g create-dmg
 
       - name: Package DMG
         run: |

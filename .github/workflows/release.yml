@@ -76,16 +76,15 @@ jobs:
 
       - name: Package DMG
         run: |
-          DMG_PATH="build/Build/Products/Release/BLEUnlock-${RELEASE_TAG}.dmg"
           APP_PATH="build/Build/Products/Release/BLEUnlock.app"
+          DEST_DIR="build/Build/Products/Release"
           create-dmg \
-            --volname "BLEUnlock ${RELEASE_TAG}" \
-            --window-pos 200 120 \
-            --window-size 600 400 \
-            --icon-size 128 \
-            --app-drop-link 450 200 \
-            "${DMG_PATH}" \
-            "${APP_PATH}"
+            --overwrite \
+            --no-code-sign \
+            --no-version-in-filename \
+            "${APP_PATH}" \
+            "${DEST_DIR}"
+          mv "${DEST_DIR}/BLEUnlock.dmg" "${DEST_DIR}/BLEUnlock-${RELEASE_TAG}.dmg"
 
       - name: Create or Update GitHub Release
         env:

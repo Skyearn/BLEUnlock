@@ -70,22 +70,35 @@ jobs:
           ENTITLEMENTS_PATH="BLEUnlock/BLEUnlock.entitlements"
           /usr/bin/codesign --force --deep --options runtime --entitlements "${ENTITLEMENTS_PATH}" --sign "${MACOS_SIGNING_IDENTITY}" "${APP_PATH}"
 
-      - name: Package App
+      - name: Install create-dmg
         run: |
-          cd build/Build/Products/Release
-          ditto -c -k --keepParent BLEUnlock.app BLEUnlock-${RELEASE_TAG}.zip
+          brew update
+          brew install create-dmg
+
+      - name: Package DMG
+        run: |
+          DMG_PATH="build/Build/Products/Release/BLEUnlock-${RELEASE_TAG}.dmg"
+          APP_PATH="build/Build/Products/Release/BLEUnlock.app"
+          create-dmg \
+            --volname "BLEUnlock ${RELEASE_TAG}" \
+            --window-pos 200 120 \
+            --window-size 600 400 \
+            --icon-size 128 \
+            --app-drop-link 450 200 \
+            "${DMG_PATH}" \
+            "${APP_PATH}"
 
       - name: Create or Update GitHub Release
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          ASSET_PATH="build/Build/Products/Release/BLEUnlock-${RELEASE_TAG}.zip"
+          DMG_PATH="build/Build/Products/Release/BLEUnlock-${RELEASE_TAG}.dmg"
           if gh release view "${RELEASE_TAG}" >/dev/null 2>&1; then
-            gh release upload "${RELEASE_TAG}" "${ASSET_PATH}" --clobber
+            gh release upload "${RELEASE_TAG}" "${DMG_PATH}" --clobber
             gh release edit "${RELEASE_TAG}" --title "${RELEASE_TAG}" --notes-file CHANGELOG.md
           else
             gh release create "${RELEASE_TAG}" \
-              "${ASSET_PATH}" \
+              "${DMG_PATH}" \
               --title "${RELEASE_TAG}" \
               --notes-file CHANGELOG.md
           fi

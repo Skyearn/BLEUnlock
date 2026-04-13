@@ -49,11 +49,14 @@ jobs:
 
       - name: Build Release App
         run: |
+          VERSION="${RELEASE_TAG#v}"
           xcodebuild \
             -project BLEUnlock.xcodeproj \
             -scheme BLEUnlock \
             -configuration Release \
             -derivedDataPath build \
+            MARKETING_VERSION="${VERSION}" \
+            CURRENT_PROJECT_VERSION="${GITHUB_RUN_NUMBER}" \
             CODE_SIGNING_ALLOWED=NO \
             build
 

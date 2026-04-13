@@ -308,7 +308,7 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 			shellPath = /bin/bash;
-			shellScript = "buildNumber=$(/usr/libexec/PlistBuddy -c \"Print CFBundleVersion\" \"${PROJECT_DIR}/${INFOPLIST_FILE}\")\nbuildNumber=$(($buildNumber + 1))\n/usr/libexec/PlistBuddy -c \"Set :CFBundleVersion $buildNumber\" \"${PROJECT_DIR}/${INFOPLIST_FILE}\"\n";
+			shellScript = "set -e\n\nINFO_PLIST=\"${TARGET_BUILD_DIR}/${FULL_PRODUCT_NAME}/Contents/Info.plist\"\nif [ ! -f \"${INFO_PLIST}\" ]; then\n  exit 0\nfi\n\nGIT_TAG=$(git -C \"${SRCROOT}\" describe --tags --exact-match 2>/dev/null || true)\nif [ -n \"${GIT_TAG}\" ]; then\n  VERSION=\"${GIT_TAG#v}\"\n  /usr/libexec/PlistBuddy -c \"Set :CFBundleShortVersionString ${VERSION}\" \"${INFO_PLIST}\"\nfi\n\nBUILD_NUM=\"\"\nif [ -n \"${GITHUB_RUN_NUMBER:-}\" ]; then\n  BUILD_NUM=\"${GITHUB_RUN_NUMBER}\"\nelse\n  BUILD_NUM=$(git -C \"${SRCROOT}\" rev-list --count HEAD 2>/dev/null || true)\nfi\n\nif [ -n \"${BUILD_NUM}\" ]; then\n  /usr/libexec/PlistBuddy -c \"Set :CFBundleVersion ${BUILD_NUM}\" \"${INFO_PLIST}\" || \\\n  /usr/libexec/PlistBuddy -c \"Add :CFBundleVersion string ${BUILD_NUM}\" \"${INFO_PLIST}\"\nfi\n";
 		};
 /* End PBXShellScriptBuildPhase section */
 

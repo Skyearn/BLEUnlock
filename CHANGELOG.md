@@ -1,18 +1,18 @@
 # Release Notes
 
-## 1.13.4
+## 1.13.5
 
-- Reorganized the unlock and lock controls by grouping logic and RSSI settings into `Unlock Settings` and `Lock Settings` submenus.
-- Disable the logic choices when only one device is being monitored, and refresh that state immediately after device selections change.
-- Keep monitored devices in the name-resolution path even when their RSSI temporarily drops below the scan list threshold, reducing UUID fallback for devices such as Apple Watch.
-- Updated the README files to match the revised menu structure and installation notes for this fork.
+- Improve media pause handling when locking the Mac.
+- Fix playback pause/resume compatibility for Apple Music, QuickTime Player, Spotify, and Safari.
+- Request Automation permission ahead of time instead of during lock, reducing lock-time freezes.
+- Make media pause and lock flow asynchronous to avoid blocking the main app process.
 
 <details>
 <summary>中文发布说明</summary>
 
-- 将解锁与锁定相关选项重新整理为 `解锁设置` 和 `锁定设置` 子菜单，把逻辑选择与 RSSI 阈值放到同一处。
-- 当只监控一台设备时，自动禁用逻辑选择项，并在勾选设备变化后立即刷新菜单状态。
-- 对已监控设备，即使瞬时 RSSI 低于扫描列表门槛，也继续参与名称解析，减少 Apple Watch 这类设备回退显示为 UUID 的情况。
-- 同步更新了 README，反映新的菜单结构以及此 fork 的安装说明。
+- 改进锁定 Mac 时的媒体暂停逻辑。
+- 修复 Apple Music、QuickTime Player、Spotify 和 Safari 的播放暂停/恢复兼容性。
+- 自动化权限改为前置申请，不再在锁屏瞬间触发，减少卡死问题。
+- 媒体暂停与锁屏流程改为异步执行，避免阻塞主进程。
 
 </details>

@@ -26,6 +26,8 @@
 	<string>$(MACOSX_DEPLOYMENT_TARGET)</string>
 	<key>NSBluetoothAlwaysUsageDescription</key>
 	<string>BLEUnlock uses Bluetooth to detect devices.</string>
+	<key>NSAppleEventsUsageDescription</key>
+	<string>BLEUnlock uses Automation to pause and resume playback in supported apps while your Mac locks and unlocks.</string>
 	<key>NSHumanReadableCopyright</key>
 	<string>Copyright © 2019-2022 Takeshi Sone. MIT Licensed.</string>
 	<key>NSMainNibFile</key>

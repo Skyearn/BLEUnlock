@@ -15,10 +15,44 @@ private let unlockLogicMenuItemKind = "unlockLogic"
 private let lockLogicMenuItemKind = "lockLogic"
 private let unlockRSSIMenuItemKind = "unlockRSSI"
 private let lockRSSIMenuItemKind = "lockRSSI"
+private let pauseNowPlayingNoticeShownKey = "pauseNowPlayingNoticeShown"
 
 private enum AppNotificationKind: String {
     case lock
     case update
+}
+
+enum ManagedMediaApp: String, CaseIterable, Hashable {
+    case music
+    case quickTimePlayer
+    case spotify
+    case safari
+
+    var bundleIdentifier: String {
+        switch self {
+        case .music:
+            return "com.apple.Music"
+        case .quickTimePlayer:
+            return "com.apple.QuickTimePlayerX"
+        case .spotify:
+            return "com.spotify.client"
+        case .safari:
+            return "com.apple.Safari"
+        }
+    }
+
+    var displayName: String {
+        switch self {
+        case .music:
+            return "Music"
+        case .quickTimePlayer:
+            return "QuickTime Player"
+        case .spotify:
+            return "Spotify"
+        case .safari:
+            return "Safari"
+        }
+    }
 }
 
 private func requestNotificationAuthorization() {
@@ -120,7 +154,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenuItemVa
     var connected = false
     var userNotification: NSUserNotification?
     var userNotificationID: String?
-    var nowPlayingWasPlaying = false
+    var pausedMediaApps: Set<ManagedMediaApp> = []
     var aboutBox: AboutBox? = nil
     var manualLock = false
     var unlockedAt = 0.0
@@ -128,6 +162,8 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenuItemVa
     var lastRSSI: Int? = nil
     var deviceMenuIsOpen = false
     var deviceMenuNeedsRefresh = false
+    var automationPermissionPromptedApps: Set<ManagedMediaApp> = []
+    let mediaControlQueue = DispatchQueue(label: "jp.sone.BLEUnlock.media-control", qos: .userInitiated)
     var systemWakeTimer: Timer?
     var wakeUnlockTimer: Timer?
     var postUnlockRetryTimer: Timer?
@@ -538,37 +574,276 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenuItemVa
         try? process.run()
     }
 
+    func isRunning(_ app: ManagedMediaApp) -> Bool {
+        !NSRunningApplication.runningApplications(withBundleIdentifier: app.bundleIdentifier).isEmpty
+    }
+
+    @discardableResult
+    func runAppleScript(_ source: String, label: String) -> String? {
+        guard let script = NSAppleScript(source: source) else {
+            print("AppleScript compile failed for \(label)")
+            return nil
+        }
+
+        var error: NSDictionary?
+        let result = script.executeAndReturnError(&error)
+        if let error {
+            print("AppleScript \(label) failed: \(error)")
+            return nil
+        }
+
+        if let stringValue = result.stringValue {
+            return stringValue
+        }
+        if result.descriptorType == typeSInt32 {
+            return String(result.int32Value)
+        }
+        return nil
+    }
+
+    func automationPermissionStatus(for app: ManagedMediaApp, askUserIfNeeded: Bool) -> OSStatus {
+        guard #available(macOS 10.14, *) else { return noErr }
+        return BLEUnlockDeterminePermissionToAutomateBundleID(app.bundleIdentifier as CFString, askUserIfNeeded)
+    }
+
+    func hasAutomationPermission(for app: ManagedMediaApp) -> Bool {
+        let status = automationPermissionStatus(for: app, askUserIfNeeded: false)
+        if status == noErr {
+            return true
+        }
+
+        if status == OSStatus(procNotFound) {
+            return false
+        }
+
+        if #available(macOS 10.14, *) {
+            let consentRequired = OSStatus(errAEEventWouldRequireUserConsent)
+            let eventNotPermitted = OSStatus(errAEEventNotPermitted)
+            let targetNotPermitted = OSStatus(errAETargetAddressNotPermitted)
+            if status == consentRequired || status == eventNotPermitted || status == targetNotPermitted {
+                return false
+            }
+        }
+
+        print("Automation permission check for \(app.displayName) returned \(status)")
+        return false
+    }
+
+    func requestAutomationPermissionsIfNeeded() {
+        guard prefs.bool(forKey: "pauseItunes") else { return }
+
+        for app in ManagedMediaApp.allCases where isRunning(app) && !hasAutomationPermission(for: app) {
+            guard !automationPermissionPromptedApps.contains(app) else { continue }
+            automationPermissionPromptedApps.insert(app)
+
+            let status = automationPermissionStatus(for: app, askUserIfNeeded: true)
+            if status == noErr {
+                print("Automation permission granted for \(app.displayName)")
+            } else {
+                print("Automation permission request for \(app.displayName) returned \(status)")
+            }
+        }
+    }
+
+    func pauseScript(for app: ManagedMediaApp) -> String {
+        switch app {
+        case .music:
+            return """
+            tell application "Music"
+                if player state is playing then
+                    pause
+                    return "paused"
+                end if
+                return "noop"
+            end tell
+            """
+        case .quickTimePlayer:
+            return """
+            tell application "QuickTime Player"
+                set didPause to false
+                repeat with aDocument in documents
+                    try
+                        if playing of aDocument then
+                            pause aDocument
+                            set didPause to true
+                        end if
+                    end try
+                end repeat
+                if didPause then
+                    return "paused"
+                end if
+                return "noop"
+            end tell
+            """
+        case .spotify:
+            return """
+            tell application "Spotify"
+                if player state is playing then
+                    pause
+                    return "paused"
+                end if
+                return "noop"
+            end tell
+            """
+        case .safari:
+            return """
+            tell application "Safari"
+                set pausedCount to 0
+                repeat with aWindow in windows
+                    repeat with aTab in tabs of aWindow
+                        try
+                            set tabResult to do JavaScript "
+                                (() => {
+                                    let paused = 0;
+                                    for (const media of document.querySelectorAll('video, audio')) {
+                                        if (!media.paused) {
+                                            media.dataset.bleunlockPaused = '1';
+                                            media.pause();
+                                            paused += 1;
+                                        }
+                                    }
+                                    return String(paused);
+                                })();
+                            " in aTab
+                            set pausedCount to pausedCount + (tabResult as integer)
+                        end try
+                    end repeat
+                end repeat
+                return pausedCount as string
+            end tell
+            """
+        }
+    }
+
+    func resumeScript(for app: ManagedMediaApp) -> String {
+        switch app {
+        case .music:
+            return """
+            tell application "Music"
+                if player state is paused then
+                    play
+                    return "played"
+                end if
+                return "noop"
+            end tell
+            """
+        case .quickTimePlayer:
+            return """
+            tell application "QuickTime Player"
+                set didPlay to false
+                repeat with aDocument in documents
+                    try
+                        if not playing of aDocument then
+                            play aDocument
+                            set didPlay to true
+                        end if
+                    end try
+                end repeat
+                if didPlay then
+                    return "played"
+                end if
+                return "noop"
+            end tell
+            """
+        case .spotify:
+            return """
+            tell application "Spotify"
+                if player state is paused then
+                    play
+                    return "played"
+                end if
+                return "noop"
+            end tell
+            """
+        case .safari:
+            return """
+            tell application "Safari"
+                set resumedCount to 0
+                repeat with aWindow in windows
+                    repeat with aTab in tabs of aWindow
+                        try
+                            set tabResult to do JavaScript "
+                                (() => {
+                                    let resumed = 0;
+                                    for (const media of document.querySelectorAll('video, audio')) {
+                                        if (media.dataset.bleunlockPaused === '1') {
+                                            delete media.dataset.bleunlockPaused;
+                                            media.play();
+                                            resumed += 1;
+                                        }
+                                    }
+                                    return String(resumed);
+                                })();
+                            " in aTab
+                            set resumedCount to resumedCount + (tabResult as integer)
+                        end try
+                    end repeat
+                end repeat
+                return resumedCount as string
+            end tell
+            """
+        }
+    }
+
+    func didPauseMediaApp(_ app: ManagedMediaApp, result: String?) -> Bool {
+        guard let result else { return false }
+        switch app {
+        case .safari:
+            return (Int(result.trimmingCharacters(in: .whitespacesAndNewlines)) ?? 0) > 0
+        default:
+            return result == "paused"
+        }
+    }
+
+    func didResumeMediaApp(_ app: ManagedMediaApp, result: String?) -> Bool {
+        guard let result else { return false }
+        switch app {
+        case .safari:
+            return (Int(result.trimmingCharacters(in: .whitespacesAndNewlines)) ?? 0) > 0
+        default:
+            return result == "played"
+        }
+    }
+
     func pauseNowPlaying() {
         guard prefs.bool(forKey: "pauseItunes") else { return }
-        MRMediaRemoteGetNowPlayingApplicationIsPlaying(
-            DispatchQueue.main,
-            { (playing) in
-                self.nowPlayingWasPlaying = playing
-                if self.nowPlayingWasPlaying {
-                    print("pause")
-                    let pauseSent = MRMediaRemoteSendCommand(MRCommandPause, nil)
-                    print("pause command sent: \(pauseSent)")
-                } else {
-                    print("skip pause because MediaRemote reported not playing")
+
+        mediaControlQueue.async {
+            self.pausedMediaApps.removeAll()
+            for app in ManagedMediaApp.allCases {
+                guard self.isRunning(app) else { continue }
+                guard self.hasAutomationPermission(for: app) else { continue }
+                let result = self.runAppleScript(self.pauseScript(for: app), label: "pause \(app.displayName)")
+                if self.didPauseMediaApp(app, result: result) {
+                    self.pausedMediaApps.insert(app)
+                    print("Paused \(app.displayName)")
                 }
             }
-        )
+        }
     }
     
     func playNowPlaying() {
         guard prefs.bool(forKey: "pauseItunes") else { return }
-        if nowPlayingWasPlaying {
-            print("play")
-            Timer.scheduledTimer(withTimeInterval: 0.5, repeats: false, block: { _ in
-                let playSent = MRMediaRemoteSendCommand(MRCommandPlay, nil)
-                print("play command sent: \(playSent)")
-                self.nowPlayingWasPlaying = false
-            })
+        mediaControlQueue.asyncAfter(deadline: .now() + 0.5) {
+            guard !self.pausedMediaApps.isEmpty else { return }
+
+            let appsToResume = self.pausedMediaApps
+            self.pausedMediaApps.removeAll()
+
+            for app in ManagedMediaApp.allCases where appsToResume.contains(app) && self.isRunning(app) {
+                guard self.hasAutomationPermission(for: app) else { continue }
+                let result = self.runAppleScript(self.resumeScript(for: app), label: "resume \(app.displayName)")
+                if self.didResumeMediaApp(app, result: result) {
+                    print("Resumed \(app.displayName)")
+                }
+            }
         }
     }
 
-    func initializeMediaRemote() {
-        MRMediaRemoteRegisterForNowPlayingNotifications(DispatchQueue.main)
+    func lockOrSaveScreenAsync() {
+        DispatchQueue.main.async {
+            self.lockOrSaveScreen()
+        }
     }
 
     func lockOrSaveScreen() {
@@ -611,7 +886,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenuItemVa
         } else if shouldLock {
             if (!isScreenLocked() && ble.lockRSSI != ble.LOCK_DISABLED) {
                 pauseNowPlaying()
-                lockOrSaveScreen()
+                lockOrSaveScreenAsync()
                 notifyUser(reason)
                 runScript(reason)
             }
@@ -851,6 +1126,25 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenuItemVa
         NSApp.activate(ignoringOtherApps: true)
         alert.runModal()
     }
+
+    func showPauseNowPlayingNoticeIfNeeded() {
+        guard !prefs.bool(forKey: pauseNowPlayingNoticeShownKey) else { return }
+
+        let alert = NSAlert()
+        alert.messageText = "Pause Now Playing Setup"
+        alert.informativeText = """
+        BLEUnlock can pause Music, QuickTime Player, Spotify, and Safari when your Mac locks.
+
+        macOS may ask you to allow BLEUnlock to control those apps. Safari also requires enabling:
+        Develop > Allow JavaScript from Apple Events
+        """
+        alert.window.title = "BLEUnlock"
+        alert.addButton(withTitle: t("ok"))
+        NSApp.activate(ignoringOtherApps: true)
+        alert.runModal()
+
+        prefs.set(true, forKey: pauseNowPlayingNoticeShownKey)
+    }
     
     func storePassword(_ password: String) {
         let pw = password.data(using: .utf8)!
@@ -999,6 +1293,10 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenuItemVa
         let pauseNowPlaying = !prefs.bool(forKey: "pauseItunes")
         prefs.set(pauseNowPlaying, forKey: "pauseItunes")
         menuItem.state = pauseNowPlaying ? .on : .off
+        if pauseNowPlaying {
+            showPauseNowPlayingNoticeIfNeeded()
+            requestAutomationPermissionsIfNeeded()
+        }
     }
     
     @objc func toggleUseScreensaver(_ menuItem: NSMenuItem) {
@@ -1030,7 +1328,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenuItemVa
         guard !isScreenLocked() else { return }
         manualLock = true
         pauseNowPlaying()
-        lockOrSaveScreen()
+        lockOrSaveScreenAsync()
     }
     
     @objc func showAboutBox() {
@@ -1317,7 +1615,6 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenuItemVa
             constructMenu()
         }
         ble.delegate = self
-        initializeMediaRemote()
         let monitoredUUIDs = loadMonitoredUUIDs()
         if !monitoredUUIDs.isEmpty {
             monitorDevices(uuids: monitoredUUIDs)
@@ -1385,6 +1682,11 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenuItemVa
         }
         startPermissionRecovery(promptAccessibility: true)
         checkUpdate()
+        if prefs.bool(forKey: "pauseItunes") {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
+                self.requestAutomationPermissionsIfNeeded()
+            }
+        }
 
         // Hide dock icon.
         // This is required because we can't have LSUIElement set to true in Info.plist,

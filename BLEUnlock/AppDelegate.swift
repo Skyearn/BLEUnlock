@@ -546,7 +546,10 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenuItemVa
                 self.nowPlayingWasPlaying = playing
                 if self.nowPlayingWasPlaying {
                     print("pause")
-                    MRMediaRemoteSendCommand(MRCommandPause, nil)
+                    let pauseSent = MRMediaRemoteSendCommand(MRCommandPause, nil)
+                    print("pause command sent: \(pauseSent)")
+                } else {
+                    print("skip pause because MediaRemote reported not playing")
                 }
             }
         )
@@ -557,10 +560,15 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenuItemVa
         if nowPlayingWasPlaying {
             print("play")
             Timer.scheduledTimer(withTimeInterval: 0.5, repeats: false, block: { _ in
-                MRMediaRemoteSendCommand(MRCommandPlay, nil)
+                let playSent = MRMediaRemoteSendCommand(MRCommandPlay, nil)
+                print("play command sent: \(playSent)")
                 self.nowPlayingWasPlaying = false
             })
         }
+    }
+
+    func initializeMediaRemote() {
+        MRMediaRemoteRegisterForNowPlayingNotifications(DispatchQueue.main)
     }
 
     func lockOrSaveScreen() {
@@ -1309,6 +1317,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenuItemVa
             constructMenu()
         }
         ble.delegate = self
+        initializeMediaRemote()
         let monitoredUUIDs = loadMonitoredUUIDs()
         if !monitoredUUIDs.isEmpty {
             monitorDevices(uuids: monitoredUUIDs)

@@ -22,6 +22,22 @@ BLEUnlock 是一款常驻菜单栏的小工具，可以根据 iPhone、Apple Wat
 - 可在离开和返回时暂停/恢复音乐或视频播放
 - 密码安全保存在钥匙串中
 
+## 安全须知
+
+BLEUnlock 通过 BLE MAC 地址识别设备，并根据 RSSI 信号强度判断距离。BLE 广播是公开且未加密的，这意味着附近的攻击者可以：
+
+1. 嗅探你已配对 BLE 设备的 MAC 地址
+2. 用市面上的 BLE 开发板伪造相同的 MAC 地址广播
+3. 靠近你的 Mac 触发自动解锁
+
+这是所有基于 RSSI 距离感知方案的固有限制，BLE 广播层本身不具备加密认证能力。
+
+此外，由于 BLEUnlock 不需要在被监测设备上安装配套 App，它无法判断设备本身是否处于锁定状态。如果设备遗失后被他人拾取，拾取者只需携带该设备靠近你的 Mac 即可触发自动解锁 —— Mac 只看到了 BLE 信号，并不知道设备是否已解锁。
+
+**建议**：如果你对安全性要求较高，请**禁用 RSSI 自动解锁**（在 *解锁设置* 中选择 *禁用*）。RSSI 自动**锁定**（离开时自动锁屏）可以放心使用，因为它只会锁定 Mac，不会授予访问权限。
+
+如果你同时需要安全性和便利性，可以考虑用 Apple 自带的 Apple Watch 解锁功能来处理解锁，仅用 BLEUnlock 来执行离开时自动锁屏。
+
 ## 运行要求
 
 - 一台支持 Bluetooth Low Energy 的 Mac
@@ -239,4 +255,4 @@ do shell script "/usr/local/bin/ffmpeg -f avfoundation -r 30 -i 0 -frames:v 1 -y
 
 MIT
 
-Copyright © 2019-2022 Takeshi Sone.
+Copyright © 2019-2022 Takeshi Sone. MIT Licensed.<br>Copyright © 2026 Skyearn. MIT Licensed.

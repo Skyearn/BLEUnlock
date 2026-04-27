@@ -22,6 +22,22 @@ This document is also available in [Japanese (日本語版はこちら)](README.
 - Optionally pauses and unpauses music/video playback when you're away and back
 - Password is securely stored in Keychain
 
+## Security Notice
+
+BLEUnlock identifies your device by its BLE MAC address and determines proximity based on RSSI signal strength. BLE broadcasts are unencrypted and public, which means a nearby attacker could:
+
+1. Sniff the MAC address of your paired BLE device
+2. Spoof the same MAC address using a readily available BLE development board
+3. Approach your Mac with the forged signal to trigger an automatic unlock
+
+This is inherent to all RSSI-based proximity solutions. There is no cryptographic authentication in the BLE broadcast layer.
+
+Additionally, because BLEUnlock does not require installing companion software on the monitored device, it cannot determine whether the device itself is locked or unlocked. If your device is lost and picked up by someone else, that person can carry it near your Mac to trigger an automatic unlock — the Mac only sees the BLE signal, not the device's lock state.
+
+**Recommendation**: If you have high security requirements, **disable RSSI unlocking** (set *Unlock Settings* → *Disable*). RSSI-based **locking** (auto-lock when you walk away) is safe to use, as it only locks your Mac and cannot grant access.
+
+For users who need both security and convenience, consider using Apple's built-in Unlock with Apple Watch feature instead for unlocking, and BLEUnlock only for automatic locking.
+
 ## Requirements
 
 - A Mac with Bluetooth Low Energy support
@@ -242,4 +258,4 @@ They are originally designed by Google LLC and licensed under Apache License ver
 
 MIT
 
-Copyright © 2019-2022 Takeshi Sone.
+Copyright © 2019-2022 Takeshi Sone. MIT Licensed.<br>Copyright © 2026 Skyearn. MIT Licensed.

@@ -116,6 +116,14 @@ To identify the device, try moving the device closer to or farther away from the
 
 If you don't see *any* device in the list, try resetting the Bluetooth module as described below.
 
+### Device scanning after switching macOS users
+
+BLEUnlock relies on macOS CoreBluetooth scanning. When multiple macOS users are logged in at the same time, especially when using Fast User Switching, macOS may keep Bluetooth scanning resources tied to the previous user's BLEUnlock process. In that state, another user's BLEUnlock instance may show no devices even though Bluetooth permission is granted and Bluetooth is powered on.
+
+If you need to use BLEUnlock across multiple macOS user accounts, quit BLEUnlock in the current user before switching to another user, then start BLEUnlock in the target user account. This fully releases the previous user's Bluetooth scanning session and is more reliable than leaving BLEUnlock running in the background.
+
+BLEUnlock does not try to automate this workaround. A reliable automatic solution would require a helper or launch agent that keeps tracking user-session state, quits BLEUnlock when a user becomes inactive, and relaunches it when that user becomes active again. That would be a large and intrusive lifecycle-management change, and the behavior would be too close to a program that keeps reviving itself in the background. For that reason, this fork documents the limitation instead of adding such a helper.
+
 ### It fails to unlock
 
 Make sure BLEUnlock is turned on in *System Preferences* > *Security & Privacy* > *Privacy* > *Accessibility*.

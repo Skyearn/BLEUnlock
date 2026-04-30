@@ -103,3 +103,43 @@ jobs:
               --title "${RELEASE_TAG}" \
               --notes-file CHANGELOG.md
           fi
+
+      - name: Update Homebrew Tap
+        env:
+          TAP_PUSH_TOKEN: ${{ secrets.TAP_PUSH_TOKEN }}
+        run: |
+          if [ -z "${TAP_PUSH_TOKEN}" ]; then
+            echo "TAP_PUSH_TOKEN is not set. Skipping Homebrew tap update."
+            exit 0
+          fi
+
+          VERSION="${RELEASE_TAG#v}"
+          DMG_PATH="build/Build/Products/Release/BLEUnlock-${RELEASE_TAG}.dmg"
+          SHA256="$(shasum -a 256 "${DMG_PATH}" | awk '{print $1}')"
+          TAP_DIR="${RUNNER_TEMP}/homebrew-tap"
+          CASK_PATH="${TAP_DIR}/Casks/bleunlock.rb"
+
+          git clone "https://x-access-token:${TAP_PUSH_TOKEN}@github.com/Skyearn/homebrew-tap.git" "${TAP_DIR}"
+
+          python3 - <<PY
+          from pathlib import Path
+
+          path = Path("${CASK_PATH}")
+          text = path.read_text()
+          text = text.replace(text.split('version "')[1].split('"')[0], "${VERSION}", 1)
+          text = text.replace(text.split('sha256 "')[1].split('"')[0], "${SHA256}", 1)
+          path.write_text(text)
+          PY
+
+          cd "${TAP_DIR}"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          if git diff --quiet -- Casks/bleunlock.rb; then
+            echo "Homebrew tap is already up to date."
+            exit 0
+          fi
+
+          git add Casks/bleunlock.rb
+          git commit -m "Update BLEUnlock to ${RELEASE_TAG}"
+          git push origin main

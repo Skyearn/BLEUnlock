@@ -46,15 +46,17 @@ For users who need both security and convenience, consider using Apple's built-i
 
 ## Installation
 
-### ~~Using Homebrew Cask~~
+### Using Homebrew Cask
 
-~~`brew install bleunlock`~~
+```sh
+brew install --cask Skyearn/tap/bleunlock
+```
 
-> This fork does not maintain the Homebrew Cask, so please use the manual installation method below.
+> This uses this fork's own Homebrew tap. The official `bleunlock` cask in Homebrew may still point to the upstream project.
 
 ### Manual installation
 
-Download the zip file from [Releases](https://github.com/Skyearn/BLEUnlock/releases), unzip and move to the Applications folder.
+Download the dmg file from [Releases](https://github.com/Skyearn/BLEUnlock/releases), open it, and move BLEUnlock to the Applications folder.
 
 > NOTE: This fork is not enrolled in the Apple Developer Program, so release builds cannot be distributed with Apple Developer ID signing and notarization. macOS may therefore block the app on first launch.
 >

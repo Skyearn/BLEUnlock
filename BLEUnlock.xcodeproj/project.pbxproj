@@ -395,7 +395,7 @@
 					"$(inherited)",
 					"@executable_path/../Frameworks",
 				);
-				PRODUCT_BUNDLE_IDENTIFIER = jp.sone.BLEUnlock.Launcher;
+				PRODUCT_BUNDLE_IDENTIFIER = com.github.Skyearn.BLEUnlock.Launcher;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				PROVISIONING_PROFILE_SPECIFIER = "";
 				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
@@ -419,7 +419,7 @@
 					"$(inherited)",
 					"@executable_path/../Frameworks",
 				);
-				PRODUCT_BUNDLE_IDENTIFIER = jp.sone.BLEUnlock.Launcher;
+				PRODUCT_BUNDLE_IDENTIFIER = com.github.Skyearn.BLEUnlock.Launcher;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				PROVISIONING_PROFILE_SPECIFIER = "";
 				SWIFT_VERSION = 5.0;
@@ -564,7 +564,7 @@
 				);
 				MARKETING_VERSION = 1.13.4;
 				CURRENT_PROJECT_VERSION = 1;
-				PRODUCT_BUNDLE_IDENTIFIER = jp.sone.BLEUnlock;
+				PRODUCT_BUNDLE_IDENTIFIER = com.github.Skyearn.BLEUnlock;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				PROVISIONING_PROFILE_SPECIFIER = "";
 				SWIFT_OBJC_BRIDGING_HEADER = "BLEUnlock/BLEUnlock-Bridging-Header.h";
@@ -596,7 +596,7 @@
 				);
 				MARKETING_VERSION = 1.13.4;
 				CURRENT_PROJECT_VERSION = 1;
-				PRODUCT_BUNDLE_IDENTIFIER = jp.sone.BLEUnlock;
+				PRODUCT_BUNDLE_IDENTIFIER = com.github.Skyearn.BLEUnlock;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				PROVISIONING_PROFILE_SPECIFIER = "";
 				SWIFT_OBJC_BRIDGING_HEADER = "BLEUnlock/BLEUnlock-Bridging-Header.h";

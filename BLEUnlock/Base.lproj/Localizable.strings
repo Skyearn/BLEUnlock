@@ -1,7 +1,10 @@
 "about" = "About BLEUnlock";
+"automatically_check_for_updates" = "Automatically Check for Updates";
 "bluetooth_power_warn" = "Bluetooth is turned off. For BLEUnlock to work, turn it on.";
 "cancel" = "Cancel";
+"check_for_updates" = "Check for Updates…";
 "closer" = "⬆Closer";
+"download_update" = "Download";
 "device" = "Device";
 "device_not_set" = "Device not selected";
 "disabled" = "Disable";
@@ -38,6 +41,7 @@
 "notification_lost_signal" = "Signal is lost";
 "notification_update_available" = "Update is available.";
 "ok" = "OK";
+"open_releases" = "Open Releases";
 "passive_mode" = "Passive Mode";
 "password_info" = "Your password will be securely stored in Keychain.";
 "password_not_set" = "Password is not set.";
@@ -49,6 +53,12 @@
 "set_rssi_threshold" = "Set Minimum RSSI…";
 "sleep_display" = "Turn Off Screen on Lock";
 "timeout" = "No-Signal Timeout";
+"update_available_message" = "BLEUnlock %1$@ is available.";
+"update_available_title" = "Update Available";
+"update_check_failed" = "Failed to Check for Updates";
+"update_up_to_date" = "BLEUnlock is up to date.";
+"updates" = "Updates";
+"updates_available" = "Updates (Available)";
 "unlock_rssi" = "Unlock RSSI";
 "use_screensaver_to_lock" = "Use Screensaver to Lock";
 "wake_on_proximity" = "Wake on Proximity";

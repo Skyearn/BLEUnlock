@@ -7,8 +7,10 @@ func t(_ key: String) -> String {
     return NSLocalizedString(key, comment: "")
 }
 
-private let lockNotificationID = "jp.sone.BLEUnlock.lock"
-private let updateNotificationID = "jp.sone.BLEUnlock.update"
+private let currentAppBundleIdentifier = "com.github.Skyearn.BLEUnlock"
+private let legacyMainBundleIdentifiers = ["jp.sone.BLEUnlock"]
+private let lockNotificationID = "com.github.Skyearn.BLEUnlock.lock"
+private let updateNotificationID = "com.github.Skyearn.BLEUnlock.update"
 private let notificationKindKey = "kind"
 private let launcherBundleIDSuffix = ".Launcher"
 private let unlockLogicMenuItemKind = "unlockLogic"
@@ -16,6 +18,8 @@ private let lockLogicMenuItemKind = "lockLogic"
 private let unlockRSSIMenuItemKind = "unlockRSSI"
 private let lockRSSIMenuItemKind = "lockRSSI"
 private let pauseNowPlayingNoticeShownKey = "pauseNowPlayingNoticeShown"
+private let autoCheckUpdatesKey = "autoCheckUpdates"
+private let legacyBundleIDMigrationKey = "legacyBundleIDMigrationComplete"
 
 private enum AppNotificationKind: String {
     case lock
@@ -83,7 +87,8 @@ private func enqueueNotification(identifier: String,
                                  title: String,
                                  subtitle: String? = nil,
                                  informativeText: String? = nil,
-                                 after delay: TimeInterval? = nil)
+                                 after delay: TimeInterval? = nil,
+                                 sound: Bool = true)
 {
     if #available(macOS 10.14, *) {
         let content = UNMutableNotificationContent()
@@ -94,7 +99,9 @@ private func enqueueNotification(identifier: String,
         if let informativeText = informativeText {
             content.body = informativeText
         }
-        content.sound = .default
+        if sound {
+            content.sound = .default
+        }
         content.userInfo = [notificationKindKey: kind.rawValue]
 
         let trigger = delay.map { UNTimeIntervalNotificationTrigger(timeInterval: $0, repeats: false) }
@@ -109,6 +116,9 @@ private func enqueueNotification(identifier: String,
         notification.title = title
         notification.subtitle = subtitle
         notification.informativeText = informativeText
+        if sound {
+            notification.soundName = NSUserNotificationDefaultSoundName
+        }
         if let delay = delay {
             notification.deliveryDate = Date().addingTimeInterval(delay)
         }
@@ -124,7 +134,8 @@ func notifyUpdateAvailable() {
         enqueueNotification(identifier: updateNotificationID,
                             kind: .update,
                             title: "BLEUnlock",
-                            subtitle: t("notification_update_available"))
+                            subtitle: t("notification_update_available"),
+                            sound: false)
     } else {
         let notification = NSUserNotification()
         notification.title = "BLEUnlock"
@@ -143,6 +154,10 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenuItemVa
     let lockSettingsMenu = NSMenu()
     let timeoutMenu = NSMenu()
     let lockDelayMenu = NSMenu()
+    let updateMenu = NSMenu()
+    var updateMenuItem: NSMenuItem?
+    var checkForUpdatesMenuItem: NSMenuItem?
+    var automaticUpdateChecksMenuItem: NSMenuItem?
     var deviceDict: [UUID: NSMenuItem] = [:]
     var deviceCheckboxDict: [UUID: NSButton] = [:]
     var monitorDetailItems: [UUID: NSMenuItem] = [:]
@@ -155,6 +170,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenuItemVa
     var userNotification: NSUserNotification?
     var userNotificationID: String?
     var pausedMediaApps: Set<ManagedMediaApp> = []
+    let pausedMediaAppsLock = NSLock()
     var aboutBox: AboutBox? = nil
     var manualLock = false
     var unlockedAt = 0.0
@@ -163,7 +179,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenuItemVa
     var deviceMenuIsOpen = false
     var deviceMenuNeedsRefresh = false
     var automationPermissionPromptedApps: Set<ManagedMediaApp> = []
-    let mediaControlQueue = DispatchQueue(label: "jp.sone.BLEUnlock.media-control", qos: .userInitiated)
+    let mediaControlQueue = DispatchQueue(label: "com.github.Skyearn.BLEUnlock.media-control", qos: .userInitiated)
     var systemWakeTimer: Timer?
     var wakeUnlockTimer: Timer?
     var postUnlockRetryTimer: Timer?
@@ -542,10 +558,19 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenuItemVa
     func userNotificationCenter(_ center: UNUserNotificationCenter,
                                 willPresent notification: UNNotification,
                                 withCompletionHandler completionHandler: @escaping (UNNotificationPresentationOptions) -> Void) {
+        let kind = notification.request.content.userInfo[notificationKindKey] as? String
         if #available(macOS 11.0, *) {
-            completionHandler([.banner, .list, .sound])
+            if kind == AppNotificationKind.update.rawValue {
+                completionHandler([.banner, .list])
+            } else {
+                completionHandler([.banner, .list, .sound])
+            }
         } else {
-            completionHandler([.alert, .sound])
+            if kind == AppNotificationKind.update.rawValue {
+                completionHandler([.alert])
+            } else {
+                completionHandler([.alert, .sound])
+            }
         }
     }
 
@@ -809,13 +834,17 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenuItemVa
         guard prefs.bool(forKey: "pauseItunes") else { return }
 
         mediaControlQueue.async {
+            self.pausedMediaAppsLock.lock()
             self.pausedMediaApps.removeAll()
+            self.pausedMediaAppsLock.unlock()
             for app in ManagedMediaApp.allCases {
                 guard self.isRunning(app) else { continue }
                 guard self.hasAutomationPermission(for: app) else { continue }
                 let result = self.runAppleScript(self.pauseScript(for: app), label: "pause \(app.displayName)")
                 if self.didPauseMediaApp(app, result: result) {
+                    self.pausedMediaAppsLock.lock()
                     self.pausedMediaApps.insert(app)
+                    self.pausedMediaAppsLock.unlock()
                     print("Paused \(app.displayName)")
                 }
             }
@@ -825,10 +854,11 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenuItemVa
     func playNowPlaying() {
         guard prefs.bool(forKey: "pauseItunes") else { return }
         mediaControlQueue.asyncAfter(deadline: .now() + 0.5) {
-            guard !self.pausedMediaApps.isEmpty else { return }
-
+            self.pausedMediaAppsLock.lock()
             let appsToResume = self.pausedMediaApps
             self.pausedMediaApps.removeAll()
+            self.pausedMediaAppsLock.unlock()
+            guard !appsToResume.isEmpty else { return }
 
             for app in ManagedMediaApp.allCases where appsToResume.contains(app) && self.isRunning(app) {
                 guard self.hasAutomationPermission(for: app) else { continue }
@@ -861,6 +891,13 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenuItemVa
     }
 
     func updatePresence(shouldUnlock: Bool, shouldLock: Bool, reason: String) {
+        if manualLock && shouldLock {
+            manualLock = false
+            if shouldUnlock {
+                return
+            }
+        }
+
         if shouldUnlock {
             if ble.unlockRSSI != ble.UNLOCK_DISABLED {
                 if let identifier = userNotificationID {
@@ -974,7 +1011,8 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenuItemVa
 
         let unlockDelay = conservativeWakeUnlock ? conservativeWakeUnlockDelay : (recentlyWoke ? 0.75 : 0.5)
         wakeUnlockTimer?.invalidate()
-        wakeUnlockTimer = Timer.scheduledTimer(withTimeInterval: unlockDelay, repeats: false, block: { _ in
+        wakeUnlockTimer = Timer.scheduledTimer(withTimeInterval: unlockDelay, repeats: false, block: { [weak self] _ in
+            guard let self = self else { return }
             self.wakeUnlockTimer = nil
             guard self.isScreenLocked() else {
                 if (recentlyWoke || self.inScreensaver) && retryCount < self.wakeUnlockMaxRetries {
@@ -984,7 +1022,6 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenuItemVa
             }
             guard let password = self.fetchPassword(warn: true) else { return }
             
-            print("Entering password")
             self.unlockedAt = Date().timeIntervalSince1970
             self.fakeKeyStrokes(password)
             self.playNowPlaying()
@@ -994,7 +1031,8 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenuItemVa
             if (recentlyWoke || self.inScreensaver) && retryCount < self.wakeUnlockMaxRetries {
                 self.postUnlockRetryTimer?.invalidate()
                 let retryDelay = conservativeWakeUnlock ? 2.0 : 1.5
-                self.postUnlockRetryTimer = Timer.scheduledTimer(withTimeInterval: retryDelay, repeats: false, block: { _ in
+                self.postUnlockRetryTimer = Timer.scheduledTimer(withTimeInterval: retryDelay, repeats: false, block: { [weak self] _ in
+                    guard let self = self else { return }
                     self.postUnlockRetryTimer = nil
                     guard self.isScreenLocked() else { return }
                     self.scheduleWakeUnlock(after: self.wakeUnlockRetryDelay, retryCount: retryCount + 1)
@@ -1014,7 +1052,8 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenuItemVa
 
     func scheduleWakeUnlock(after delay: TimeInterval, retryCount: Int = 0) {
         wakeUnlockTimer?.invalidate()
-        wakeUnlockTimer = Timer.scheduledTimer(withTimeInterval: delay, repeats: false, block: { _ in
+        wakeUnlockTimer = Timer.scheduledTimer(withTimeInterval: delay, repeats: false, block: { [weak self] _ in
+            guard let self = self else { return }
             self.wakeUnlockTimer = nil
             self.tryUnlockScreen(retryCount: retryCount)
         })
@@ -1038,7 +1077,8 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenuItemVa
     @objc func onSystemWake() {
         print("system wake")
         systemWakeTimer?.invalidate()
-        systemWakeTimer = Timer.scheduledTimer(withTimeInterval: 1, repeats: false, block: { _ in
+        systemWakeTimer = Timer.scheduledTimer(withTimeInterval: 1, repeats: false, block: { [weak self] _ in
+            guard let self = self else { return }
             self.systemWakeTimer = nil
             print("delayed system wake job")
             NSApp.setActivationPolicy(.accessory) // Hide Dock icon again
@@ -1066,7 +1106,8 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenuItemVa
         inScreensaver = false
         lastSystemSleepStartedAt = 0
         lastScreensaverStartedAt = 0
-        Timer.scheduledTimer(withTimeInterval: 2, repeats: false, block: { _ in
+        Timer.scheduledTimer(withTimeInterval: 2, repeats: false, block: { [weak self] _ in
+            guard let self = self else { return }
             print("onUnlock")
             if Date().timeIntervalSince1970 >= self.unlockedAt + 10 {
                 if self.ble.unlockRSSI != self.ble.UNLOCK_DISABLED {
@@ -1076,8 +1117,8 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenuItemVa
             }
         })
         manualLock = false
-        Timer.scheduledTimer(withTimeInterval: 2, repeats: false, block: { _ in
-            checkUpdate()
+        Timer.scheduledTimer(withTimeInterval: 2, repeats: false, block: { [weak self] _ in
+            self?.runAutomaticUpdateCheck()
         })
     }
 
@@ -1127,6 +1168,16 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenuItemVa
         alert.runModal()
     }
 
+    func infoModal(_ msg: String, info: String? = nil) {
+        let alert = NSAlert()
+        alert.messageText = msg
+        alert.informativeText = info ?? ""
+        alert.window.title = "BLEUnlock"
+        alert.addButton(withTitle: t("ok"))
+        NSApp.activate(ignoringOtherApps: true)
+        alert.runModal()
+    }
+
     func showPauseNowPlayingNoticeIfNeeded() {
         guard !prefs.bool(forKey: pauseNowPlayingNoticeShownKey) else { return }
 
@@ -1145,15 +1196,45 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenuItemVa
 
         prefs.set(true, forKey: pauseNowPlayingNoticeShownKey)
     }
+
+    func keychainQuery(service: String) -> [String: Any] {
+        [
+            String(kSecClass): kSecClassGenericPassword,
+            String(kSecAttrAccount): NSUserName(),
+            String(kSecAttrService): service,
+        ]
+    }
+
+    func currentKeychainServiceIdentifier() -> String {
+        Bundle.main.bundleIdentifier ?? currentAppBundleIdentifier
+    }
+
+    func keychainServiceIdentifiersForLookup() -> [String] {
+        [currentKeychainServiceIdentifier()] + legacyMainBundleIdentifiers
+    }
+
+    func retrievePasswordData(service: String) -> (status: OSStatus, data: Data?) {
+        var query = keychainQuery(service: service)
+        query[String(kSecReturnData)] = kCFBooleanTrue!
+        query[String(kSecMatchLimit)] = kSecMatchLimitOne
+
+        var item: AnyObject?
+        let status = SecItemCopyMatching(query as CFDictionary, &item)
+        return (status, item as? Data)
+    }
     
     func storePassword(_ password: String) {
-        let pw = password.data(using: .utf8)!
+        guard let pw = password.data(using: .utf8) else {
+            errorModal("Failed to encode password")
+            return
+        }
         
         let query: [String: Any] = [
             String(kSecClass): kSecClassGenericPassword,
             String(kSecAttrAccount): NSUserName(),
-            String(kSecAttrService): Bundle.main.bundleIdentifier ?? "BLEUnlock",
+            String(kSecAttrService): currentKeychainServiceIdentifier(),
             String(kSecAttrLabel): "BLEUnlock",
+            String(kSecAttrAccessible): kSecAttrAccessibleWhenUnlockedThisDeviceOnly,
             String(kSecValueData): pw,
         ]
         SecItemDelete(query as CFDictionary)
@@ -1166,33 +1247,79 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenuItemVa
     }
 
     func fetchPassword(warn: Bool = false) -> String? {
-        let query: [String: Any] = [
-            String(kSecClass): kSecClassGenericPassword,
-            String(kSecAttrAccount): NSUserName(),
-            String(kSecAttrService): Bundle.main.bundleIdentifier ?? "BLEUnlock",
-            String(kSecReturnData): kCFBooleanTrue!,
-            String(kSecMatchLimit): kSecMatchLimitOne,
-        ]
-        
-        var item: AnyObject?
-        let status = SecItemCopyMatching(query as CFDictionary, &item)
-        if (status == errSecItemNotFound) {
-            print("Password is not stored")
-            if warn {
-                errorModal(t("password_not_set"))
+        var lastFailureStatus: OSStatus?
+
+        for service in keychainServiceIdentifiersForLookup() {
+            let result = retrievePasswordData(service: service)
+            if result.status == errSecItemNotFound {
+                continue
             }
-            return nil
+            guard result.status == errSecSuccess else {
+                lastFailureStatus = result.status
+                continue
+            }
+            guard let data = result.data else {
+                errorModal("Failed to convert password")
+                return nil
+            }
+            guard let password = String(data: data, encoding: .utf8) else {
+                errorModal("Stored password is unreadable", info: "The Keychain item may be corrupted. Please set the password again.")
+                return nil
+            }
+
+            if service != currentKeychainServiceIdentifier() {
+                storePassword(password)
+            }
+            return password
         }
-        guard status == errSecSuccess else {
+
+        if let status = lastFailureStatus {
             let info = SecCopyErrorMessageString(status, nil)
             errorModal("Failed to retrieve password", info: info as String? ?? "Status \(status)")
             return nil
         }
-        guard let data = item as? Data else {
-            errorModal("Failed to convert password")
-            return nil
+
+        print("Password is not stored")
+        if warn {
+            errorModal(t("password_not_set"))
         }
-        return String(data: data, encoding: .utf8)!
+        return nil
+    }
+
+    func migrateLegacyDefaultsIfNeeded() {
+        guard !prefs.bool(forKey: legacyBundleIDMigrationKey) else { return }
+
+        for legacyBundleIdentifier in legacyMainBundleIdentifiers {
+            guard let legacyDefaults = UserDefaults(suiteName: legacyBundleIdentifier),
+                  let legacyDomain = legacyDefaults.persistentDomain(forName: legacyBundleIdentifier) else {
+                continue
+            }
+
+            for (key, value) in legacyDomain where prefs.object(forKey: key) == nil {
+                prefs.set(value, forKey: key)
+            }
+        }
+
+        prefs.set(true, forKey: legacyBundleIDMigrationKey)
+    }
+
+    func legacyLauncherBundleIdentifiers() -> [String] {
+        legacyMainBundleIdentifiers.map { $0 + launcherBundleIDSuffix }
+    }
+
+    func disableLegacyLoginItems() {
+        for legacyLauncherBundleIdentifier in legacyLauncherBundleIdentifiers() {
+            _ = SMLoginItemSetEnabled(legacyLauncherBundleIdentifier as CFString, false)
+            if #available(macOS 13.0, *) {
+                let service = SMAppService.loginItem(identifier: legacyLauncherBundleIdentifier)
+                try? service.unregister()
+            }
+        }
+    }
+
+    func migrateLegacyAppDataIfNeeded() {
+        migrateLegacyDefaultsIfNeeded()
+        disableLegacyLoginItems()
     }
     
     @objc func askPassword() {
@@ -1324,6 +1451,16 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenuItemVa
         menuItem.state = wakeWithoutUnlocking ? .on : .off
     }
 
+    @objc func toggleAutomaticUpdateChecks(_ menuItem: NSMenuItem) {
+        let enabled = !automaticUpdateChecksEnabled()
+        prefs.set(enabled, forKey: autoCheckUpdatesKey)
+        menuItem.state = enabled ? .on : .off
+        if !enabled {
+            clearPendingUpdate()
+        }
+        refreshUpdateMenuItems()
+    }
+
     @objc func lockNow() {
         guard !isScreenLocked() else { return }
         manualLock = true
@@ -1333,6 +1470,75 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenuItemVa
     
     @objc func showAboutBox() {
         AboutBox.showAboutBox()
+    }
+
+    @objc func checkForUpdates() {
+        checkUpdate(force: true) { [weak self] result in
+            DispatchQueue.main.async {
+                guard let self = self else { return }
+                switch result {
+                case .available(let version, let downloadURL, let releaseURL):
+                    savePendingUpdate(version: version, downloadURL: downloadURL, releaseURL: releaseURL)
+                    self.refreshUpdateMenuItems()
+                    let alert = NSAlert()
+                    alert.messageText = t("update_available_title")
+                    alert.informativeText = String(format: t("update_available_message"), version)
+                    alert.window.title = "BLEUnlock"
+                    if downloadURL != nil {
+                        alert.addButton(withTitle: t("download_update"))
+                    }
+                    alert.addButton(withTitle: t("open_releases"))
+                    alert.addButton(withTitle: t("cancel"))
+                    NSApp.activate(ignoringOtherApps: true)
+                    let response = alert.runModal()
+                    if response == .alertFirstButtonReturn {
+                        if let downloadURL {
+                            NSWorkspace.shared.open(downloadURL)
+                        } else {
+                            NSWorkspace.shared.open(releaseURL)
+                        }
+                    } else if downloadURL != nil && response == .alertSecondButtonReturn {
+                        NSWorkspace.shared.open(releaseURL)
+                    }
+                case .upToDate:
+                    clearPendingUpdate()
+                    self.refreshUpdateMenuItems()
+                    self.infoModal(t("update_up_to_date"))
+                case .failure(let message):
+                    self.errorModal(t("update_check_failed"), info: message)
+                }
+            }
+        }
+    }
+
+    func runAutomaticUpdateCheck() {
+        checkUpdate { [weak self] result in
+            DispatchQueue.main.async {
+                guard let self = self else { return }
+                guard automaticUpdateChecksEnabled() else {
+                    clearPendingUpdate()
+                    self.refreshUpdateMenuItems()
+                    return
+                }
+
+                switch result {
+                case .available(let version, let downloadURL, let releaseURL):
+                    savePendingUpdate(version: version, downloadURL: downloadURL, releaseURL: releaseURL)
+                case .upToDate:
+                    clearPendingUpdate()
+                case .failure:
+                    break
+                }
+                self.refreshUpdateMenuItems()
+            }
+        }
+    }
+
+    func refreshUpdateMenuItems() {
+        let hasPendingUpdate = pendingUpdate() != nil
+        updateMenuItem?.title = hasPendingUpdate ? t("updates_available") : t("updates")
+        checkForUpdatesMenuItem?.title = t("check_for_updates")
+        automaticUpdateChecksMenuItem?.state = automaticUpdateChecksEnabled() ? .on : .off
     }
 
     func updateSettingsMenu(_ menu: NSMenu, logicKind: String, selectedLogic: Int, rssiKind: String, selectedRSSI: Int) {
@@ -1491,6 +1697,15 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenuItemVa
         
         mainMenu.addItem(withTitle: t("set_rssi_threshold"), action: #selector(setRSSIThreshold),
                          keyEquivalent: "")
+        let updateItem = mainMenu.addItem(withTitle: t("updates"), action: nil, keyEquivalent: "")
+        updateMenuItem = updateItem
+        updateItem.submenu = updateMenu
+        item = updateMenu.addItem(withTitle: t("automatically_check_for_updates"), action: #selector(toggleAutomaticUpdateChecks), keyEquivalent: "")
+        automaticUpdateChecksMenuItem = item
+        item.state = automaticUpdateChecksEnabled() ? .on : .off
+        checkForUpdatesMenuItem = updateMenu.addItem(withTitle: t("check_for_updates"), action: #selector(checkForUpdates),
+                                                     keyEquivalent: "")
+        refreshUpdateMenuItems()
 
         mainMenu.addItem(NSMenuItem.separator())
         mainMenu.addItem(withTitle: t("about"), action: #selector(showAboutBox), keyEquivalent: "")
@@ -1532,8 +1747,8 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenuItemVa
             return
         }
         guard permissionRecoveryTimer == nil else { return }
-        permissionRecoveryTimer = Timer.scheduledTimer(withTimeInterval: 2, repeats: true, block: { _ in
-            self.refreshPermissionRecovery()
+        permissionRecoveryTimer = Timer.scheduledTimer(withTimeInterval: 2, repeats: true, block: { [weak self] _ in
+            self?.refreshPermissionRecovery()
         })
         if let timer = permissionRecoveryTimer {
             RunLoop.main.add(timer, forMode: .common)
@@ -1548,10 +1763,11 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenuItemVa
     }
 
     func launcherBundleIdentifier() -> String {
-        (Bundle.main.bundleIdentifier ?? "jp.sone.BLEUnlock") + launcherBundleIDSuffix
+        (Bundle.main.bundleIdentifier ?? currentAppBundleIdentifier) + launcherBundleIDSuffix
     }
 
     func disableLegacyLoginItem() {
+        disableLegacyLoginItems()
         _ = SMLoginItemSetEnabled(launcherBundleIdentifier() as CFString, false)
     }
 
@@ -1610,6 +1826,8 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenuItemVa
     }
 
     func applicationDidFinishLaunching(_ aNotification: Notification) {
+        migrateLegacyAppDataIfNeeded()
+
         if let button = statusItem.button {
             button.image = NSImage(named: "StatusBarDisconnected")
             constructMenu()
@@ -1681,10 +1899,10 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenuItemVa
             _ = setLaunchAtLogin(true, showErrors: false)
         }
         startPermissionRecovery(promptAccessibility: true)
-        checkUpdate()
+        runAutomaticUpdateCheck()
         if prefs.bool(forKey: "pauseItunes") {
-            DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
-                self.requestAutomationPermissionsIfNeeded()
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) { [weak self] in
+                self?.requestAutomationPermissionsIfNeeded()
             }
         }
 

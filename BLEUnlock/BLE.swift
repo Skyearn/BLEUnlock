@@ -6,18 +6,36 @@ let DeviceInformation = CBUUID(string:"180A")
 let ManufacturerName = CBUUID(string:"2A29")
 let ModelName = CBUUID(string:"2A24")
 let ExposureNotification = CBUUID(string:"FD6F")
-let nameResolutionLogPath = "/tmp/BLEUnlock-name-resolution.log"
+
+func nameResolutionLogURL() -> URL? {
+    let fileManager = FileManager.default
+    guard let logsDirectory = fileManager.urls(for: .libraryDirectory, in: .userDomainMask).first?
+        .appendingPathComponent("Logs", isDirectory: true)
+        .appendingPathComponent("BLEUnlock", isDirectory: true) else {
+        return nil
+    }
+
+    do {
+        try fileManager.createDirectory(at: logsDirectory, withIntermediateDirectories: true)
+    } catch {
+        return nil
+    }
+
+    return logsDirectory.appendingPathComponent("name-resolution.log", isDirectory: false)
+}
 
 func appendNameResolutionLog(_ message: String) {
     let line = message + "\n"
     let data = Data(line.utf8)
     let fileManager = FileManager.default
+    guard let logURL = nameResolutionLogURL() else { return }
+    let path = logURL.path
 
-    if !fileManager.fileExists(atPath: nameResolutionLogPath) {
-        fileManager.createFile(atPath: nameResolutionLogPath, contents: nil)
+    if !fileManager.fileExists(atPath: path) {
+        fileManager.createFile(atPath: path, contents: nil)
     }
 
-    guard let handle = FileHandle(forWritingAtPath: nameResolutionLogPath) else { return }
+    guard let handle = FileHandle(forWritingAtPath: path) else { return }
     handle.seekToEndOfFile()
     handle.write(data)
     handle.closeFile()
@@ -152,7 +170,7 @@ class Device: NSObject {
         }
 
         if let adv = advData, adv.count >= 25 {
-            var iBeaconPrefix : [uint16] = [0x004c, 0x01502]
+            var iBeaconPrefix : [uint16] = [0x004c, 0x0215]
             if adv[0...3] == Data(bytes: &iBeaconPrefix, count: 4) {
                 let major = uint16(adv[20]) << 8 | uint16(adv[21])
                 let minor = uint16(adv[22]) << 8 | uint16(adv[23])

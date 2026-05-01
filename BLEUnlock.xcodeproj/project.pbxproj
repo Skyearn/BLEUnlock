@@ -562,7 +562,7 @@
 					"$(inherited)",
 					"@executable_path/../Frameworks",
 				);
-				MARKETING_VERSION = 1.13.4;
+				MARKETING_VERSION = 1.13.6;
 				CURRENT_PROJECT_VERSION = 1;
 				PRODUCT_BUNDLE_IDENTIFIER = com.github.Skyearn.BLEUnlock;
 				PRODUCT_NAME = "$(TARGET_NAME)";
@@ -594,7 +594,7 @@
 					"$(inherited)",
 					"@executable_path/../Frameworks",
 				);
-				MARKETING_VERSION = 1.13.4;
+				MARKETING_VERSION = 1.13.6;
 				CURRENT_PROJECT_VERSION = 1;
 				PRODUCT_BUNDLE_IDENTIFIER = com.github.Skyearn.BLEUnlock;
 				PRODUCT_NAME = "$(TARGET_NAME)";

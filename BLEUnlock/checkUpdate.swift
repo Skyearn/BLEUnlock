@@ -60,6 +60,12 @@ func pendingUpdate() -> PendingUpdate? {
         return nil
     }
 
+    if let currentVersion = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String,
+       normalizedVersion(currentVersion) == normalizedVersion(version) {
+        clearPendingUpdate()
+        return nil
+    }
+
     let downloadURL = prefs.string(forKey: pendingUpdateDownloadURLKey).flatMap(URL.init(string:))
     return PendingUpdate(version: version, downloadURL: downloadURL, releaseURL: releaseURL)
 }

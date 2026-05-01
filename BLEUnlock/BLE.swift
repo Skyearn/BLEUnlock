@@ -510,7 +510,8 @@ class BLE: NSObject, CBCentralManagerDelegate, CBPeripheralDelegate {
 
     func resetSignalTimer(for state: MonitoredDeviceState) {
         state.signalTimer?.invalidate()
-        state.signalTimer = Timer.scheduledTimer(withTimeInterval: signalTimeout, repeats: false, block: { _ in
+        state.signalTimer = Timer.scheduledTimer(withTimeInterval: signalTimeout, repeats: false, block: { [weak self, weak state] _ in
+            guard let self = self, let state = state else { return }
             print("Device \(state.uuid) is lost")
             state.lastRSSI = nil
             state.activeModeTimer?.invalidate()
@@ -589,7 +590,8 @@ class BLE: NSObject, CBCentralManagerDelegate, CBPeripheralDelegate {
                 state.proximityTimer = nil
             }
         } else if state.presence && state.proximityTimer == nil {
-            state.proximityTimer = Timer.scheduledTimer(withTimeInterval: proximityTimeout, repeats: false, block: { _ in
+            state.proximityTimer = Timer.scheduledTimer(withTimeInterval: proximityTimeout, repeats: false, block: { [weak self, weak state] _ in
+                guard let self = self, let state = state else { return }
                 print("Device \(state.uuid) is away")
                 state.presence = false
                 self.updateAggregatePresence(reason: "away")
@@ -622,7 +624,8 @@ class BLE: NSObject, CBCentralManagerDelegate, CBPeripheralDelegate {
         print("Connecting \(state.uuid)")
         centralMgr.connect(p, options: nil)
         state.connectionTimer?.invalidate()
-        state.connectionTimer = Timer.scheduledTimer(withTimeInterval: 60, repeats: false, block: { _ in
+        state.connectionTimer = Timer.scheduledTimer(withTimeInterval: 60, repeats: false, block: { [weak self, weak state, weak p] _ in
+            guard let self = self, let state = state, let p = p else { return }
             if p.state == .connecting {
                 print("Connection timeout \(state.uuid)")
                 self.centralMgr.cancelPeripheralConnection(p)
@@ -635,7 +638,8 @@ class BLE: NSObject, CBCentralManagerDelegate, CBPeripheralDelegate {
 
     func resetScanTimer(device: Device) {
         device.scanTimer?.invalidate()
-        device.scanTimer = Timer.scheduledTimer(withTimeInterval: signalTimeout, repeats: false, block: { _ in
+        device.scanTimer = Timer.scheduledTimer(withTimeInterval: signalTimeout, repeats: false, block: { [weak self, weak device] _ in
+            guard let self = self, let device = device else { return }
             device.isVisible = false
             self.delegate?.removeDevice(device: device)
             if let p = device.peripheral, !self.isMonitoring(uuid: device.uuid) {
@@ -744,7 +748,8 @@ class BLE: NSObject, CBCentralManagerDelegate, CBPeripheralDelegate {
             if !scanMode {
                 centralMgr.stopScan()
             }
-            state.activeModeTimer = Timer.scheduledTimer(withTimeInterval: 2, repeats: true, block: { _ in
+            state.activeModeTimer = Timer.scheduledTimer(withTimeInterval: 2, repeats: true, block: { [weak self, weak state, weak peripheral] _ in
+                guard let self = self, let state = state, let peripheral = peripheral else { return }
                 if Date().timeIntervalSince1970 > state.lastReadAt + 10 {
                     print("Falling back to passive mode for \(state.uuid)")
                     self.centralMgr.cancelPeripheralConnection(peripheral)
@@ -805,7 +810,7 @@ class BLE: NSObject, CBCentralManagerDelegate, CBPeripheralDelegate {
                         device.logNameResolutionIfNeeded(context: "characteristic:model")
                         delegate?.updateDevice(device: device)
                     }
-                    if device.model != nil && device.model != nil && !isMonitoring(uuid: device.uuid) {
+                    if device.manufacture != nil && device.model != nil && !isMonitoring(uuid: device.uuid) {
                         centralMgr.cancelPeripheralConnection(peripheral)
                     }
                 }

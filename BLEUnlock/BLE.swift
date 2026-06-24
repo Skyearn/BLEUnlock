@@ -820,8 +820,17 @@ class BLE: NSObject, CBCentralManagerDelegate, CBPeripheralDelegate {
                     
                     devices[peripheral.identifier] = device
                     central.connect(peripheral, options: nil)
+                    
+                    // Post-hoc MAC correlation: check again now that device.macAddr is set
+                    if let mac = device.macAddr, let matched = findKnownDeviceByMAC(newMAC: mac, knownDevices: devices.filter { $0.key != peripheral.identifier }) {
+                        print("Late correlation: merging \(peripheral.identifier) into \(matched.uuid)")
+                        devices.removeValue(forKey: matched.uuid)
+                        delegate?.mergeDevice(oldUUID: matched.uuid, newDevice: device)
+                    } else {
+                        delegate?.newDevice(device: device)
+                    }
+                    
                     device.logNameResolutionIfNeeded(context: "discover:new")
-                    delegate?.newDevice(device: device)
                 }
             } else {
                 device = dev!
@@ -832,11 +841,19 @@ class BLE: NSObject, CBCentralManagerDelegate, CBPeripheralDelegate {
                 device.advertisedLocalName = device.normalizedName(advertisementData[CBAdvertisementDataLocalNameKey] as? String) ?? device.advertisedLocalName
                 device.updateAdvertisedNameIfNeeded(device.advertisedLocalName)
                 // IOBluetooth MAC resolution for paired devices
+                let hadMAC = device.macAddr != nil
                 if device.macAddr == nil, let name = device.currentResolvedName() {
                     device.macAddr = resolveMACForDeviceName(name)
                 }
-                device.logNameResolutionIfNeeded(context: "discover:update")
-                delegate?.updateDevice(device: device)
+                // Post-hoc MAC correlation if MAC was just resolved
+                if !hadMAC, let mac = device.macAddr, let matched = findKnownDeviceByMAC(newMAC: mac, knownDevices: devices.filter { $0.key != peripheral.identifier }) {
+                    print("Late correlation (update): merging \(peripheral.identifier) into \(matched.uuid)")
+                    devices.removeValue(forKey: matched.uuid)
+                    delegate?.mergeDevice(oldUUID: matched.uuid, newDevice: device)
+                } else {
+                    device.logNameResolutionIfNeeded(context: "discover:update")
+                    delegate?.updateDevice(device: device)
+                }
             }
             if let device = device {
                 resetScanTimer(device: device)

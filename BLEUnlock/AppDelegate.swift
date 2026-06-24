@@ -323,7 +323,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenuItemVa
         let savedMACToUUID = loadPersistedMACs()
         // Track which MACs came from persistence so we can inject them
         // into currently-monitored devices whose UUIDs have rotated.
-        var orphanedMACs: [String: String] = [:]  // MAC → name hint
+        var isolatedMACs: [String: String] = [:]  // MAC → name hint
         for (mac, uuidStr) in savedMACToUUID {
             guard let uuid = UUID(uuidString: uuidStr) else { continue }
             if uuids.contains(uuid) {
@@ -335,7 +335,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenuItemVa
                 }
             } else {
                 // UUID rotated — save MAC for later injection
-                orphanedMACs[mac] = uuidStr
+                isolatedMACs[mac] = uuidStr
             }
         }
         // ── 2. Try IOBluetooth for any remaining UUIDs ──
@@ -367,11 +367,11 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenuItemVa
         // has rotated since the last session.
         for uuid in uuids where ble.devices[uuid] == nil {
             let device = Device(uuid: uuid)
-            // Try to inject an orphaned MAC from step 1 (UUID rotated but MAC persisted)
+            // Try to inject an isolated MAC from step 1 (UUID rotated but MAC persisted)
             var injected = false
-            if !orphanedMACs.isEmpty {
+            if !isolatedMACs.isEmpty {
                 let name = monitoredDeviceTitle(uuid: uuid).lowercased()
-                for (mac, oldUUIDStr) in orphanedMACs {
+                for (mac, oldUUIDStr) in isolatedMACs {
                     guard let oldUUID = UUID(uuidString: oldUUIDStr) else { continue }
                     let oldName = monitoredDeviceTitle(uuid: oldUUID).lowercased()
                     if name == oldName, name != uuid.uuidString.lowercased() {

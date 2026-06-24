@@ -179,6 +179,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenuItemVa
     var inScreensaver = false
     var lastRSSI: Int? = nil
     var deviceMenuIsOpen = false
+    var deviceMenuNeedsReorder = false
     var deviceMenuNeedsRefresh = false
     var automationPermissionPromptedApps: Set<ManagedMediaApp> = []
     let mediaControlQueue = DispatchQueue(label: "com.github.Skyearn.BLEUnlock.media-control", qos: .userInitiated)
@@ -202,6 +203,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenuItemVa
             deviceMenuIsOpen = false
             refreshDeviceMenuSelectionStates()
             deviceMenuNeedsRefresh = false
+            performDeviceMenuReorder()
             deviceMenuIsOpen = true
             ble.startScanning()
         } else if menu == unlockSettingsMenu {
@@ -253,11 +255,14 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenuItemVa
     func menuDidClose(_ menu: NSMenu) {
         if menu == deviceMenu {
             deviceMenuIsOpen = false
+            deviceMenuNeedsReorder = false   // cancel any stale async dispatch from tracking period
             ble.stopScanning()
             if deviceMenuNeedsRefresh {
                 refreshDeviceMenuSelectionStates()
                 deviceMenuNeedsRefresh = false
             }
+            // Final reorder to clean up any ordering drift from items appended during tracking
+            performDeviceMenuReorder()
         }
     }
     
@@ -310,12 +315,24 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenuItemVa
         deviceMenu.insertItem(NSMenuItem.separator(), at: 1)
     }
 
-    /// Resolve MAC addresses for monitored UUIDs using IOBluetooth paired devices.
-    /// This allows cross-correlation to remap monitoring when device UUIDs changed
+    /// Resolve MAC addresses for monitored devices at startup.
+    /// First restores MACs persisted from the previous session, then falls back to
+    /// IOBluetooth for any remaining devices that have a known name.
+    /// Persisted MACs are critical for re‑identifying devices whose BLE UUID rotates
     /// while BLEUnlock was not running.
     func resolveMonitoredMACsOnStartup(uuids: Set<UUID>) {
+        // ── 1. Restore persisted MACs from UserDefaults ──
+        let savedMACs = loadPersistedMACs()
+        for uuid in uuids {
+            if ble.devices[uuid] == nil, let mac = savedMACs[uuid] {
+                let device = Device(uuid: uuid)
+                device.macAddr = mac
+                ble.devices[uuid] = device
+                print("Startup MAC restored from persistence: \(uuid) → \(mac)")
+            }
+        }
+        // ── 2. Try IOBluetooth for any remaining UUIDs ──
         guard let paired = IOBluetoothDevice.pairedDevices() else { return }
-        // Build name → MAC map from IOBluetooth
         var nameToMAC: [String: String] = [:]
         for d in paired {
             guard let dev = d as? IOBluetoothDevice,
@@ -323,16 +340,17 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenuItemVa
                   let addr = dev.addressString else { continue }
             nameToMAC[name.lowercased()] = addr
         }
-        // For each monitored UUID, try to find its name and resolve MAC
-        for uuid in uuids {
+        for uuid in uuids where ble.devices[uuid]?.macAddr == nil {
             let name = monitoredDeviceTitle(uuid: uuid)
-            guard name != uuid.uuidString else { continue } // Skip UUID-only names
+            guard name != uuid.uuidString else { continue }
             if let mac = nameToMAC[name.lowercased()] {
                 print("Startup MAC resolved for \(name): \(mac)")
                 if ble.devices[uuid] == nil {
                     let device = Device(uuid: uuid)
                     device.macAddr = mac
                     ble.devices[uuid] = device
+                } else {
+                    ble.devices[uuid]?.macAddr = mac
                 }
             }
         }
@@ -347,32 +365,175 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenuItemVa
         }
     }
 
+    func scheduleDeviceMenuReorder() {
+        guard !deviceMenuNeedsReorder else { return }
+        deviceMenuNeedsReorder = true
+        DispatchQueue.main.async { [weak self] in
+            guard let self = self, self.deviceMenuNeedsReorder else { return }
+            self.deviceMenuNeedsReorder = false
+            self.performDeviceMenuReorder()
+        }
+    }
+
+    // MARK: - Device menu ordering
+
+    /// Persistent separator between monitored and unmonitored device groups.
+    /// Always present in the menu; visibility is toggled via isHidden instead of add/remove
+    /// so that it can be updated during NSMenuTrackingSession without crashing.
+    var groupSeparatorItem: NSMenuItem?
+    /// The "Scanning…" item, placed right after the group separator as a header
+    /// for the unmonitored section.
+    var scanningMenuItem: NSMenuItem?
+
+    /// Full rebuild of the device menu: monitored first, inter-group separator, then unmonitored.
+    /// The separator item itself is persistent — it is never removed, only hidden/shown.
+    /// During menu tracking only the separator visibility is updated to avoid NSMenu corruption.
+    /// Layout: hint(0) + fixed-sep(1) + monitored devices + group-sep + "Scanning…" + unmonitored devices.
+    /// Uses a diff-based approach: only removes stale items and inserts missing ones,
+    /// avoiding the wholesale remove+rebuild that can crash NSMenu internals.
     func performDeviceMenuReorder() {
-        // Layout: hint(0) + sep(1) + Scanning(2) + devices...
+        guard !deviceMenuIsOpen else {
+            updateGroupSeparatorVisibility()
+            return
+        }
         let monitoredSet = ble.monitoredUUIDs
         let orderedUUIDs = deviceInsertionOrder.filter { deviceDict[$0] != nil }
-        let monitoredFirst = orderedUUIDs.filter { monitoredSet.contains($0) }
-        let unmonitoredAfter = orderedUUIDs.filter { !monitoredSet.contains($0) }
-        // Remove old device items (hint=0, sep=1, scanning=2, devices=3+)
-        while deviceMenu.numberOfItems > 3 {
-            deviceMenu.removeItem(at: 3)
+        let snapshot = orderedUUIDs.compactMap { uuid -> (UUID, NSMenuItem)? in
+            guard let item = deviceDict[uuid] else { return nil }
+            return (uuid, item)
         }
-        // Re-add: monitored first
-        for uuid in monitoredFirst {
-            if let menuItem = deviceDict[uuid] {
-                deviceMenu.addItem(menuItem)
+        let monitoredFirst = snapshot.filter { monitoredSet.contains($0.0) }
+        let unmonitoredAfter = snapshot.filter { !monitoredSet.contains($0.0) }
+        let wantsSeparator = !monitoredFirst.isEmpty && !unmonitoredAfter.isEmpty
+
+        // Build desired items list (flat)
+        var desired: [NSMenuItem] = []
+        for (_, item) in monitoredFirst { desired.append(item) }
+        if wantsSeparator {
+            if groupSeparatorItem == nil { groupSeparatorItem = NSMenuItem.separator() }
+            desired.append(groupSeparatorItem!)
+        }
+        if scanningMenuItem == nil {
+            let si = NSMenuItem(title: t("scanning"), action: nil, keyEquivalent: "")
+            si.isEnabled = false
+            scanningMenuItem = si
+        }
+        desired.append(scanningMenuItem!)
+        for (_, item) in unmonitoredAfter { desired.append(item) }
+
+        // Read current items from index 2 (hint=0, fixed-sep=1)
+        let devStart = 2
+        var current: [NSMenuItem] = []
+        for i in devStart..<deviceMenu.numberOfItems {
+            if let item = deviceMenu.item(at: i) { current.append(item) }
+        }
+
+        // Diff & reconcile: walk both lists, removing stale items and inserting missing ones
+        var ci = 0, di = 0
+        while ci < current.count || di < desired.count {
+            if di >= desired.count {
+                // Trailing current items are stale — remove them
+                deviceMenu.removeItem(at: devStart + ci)
+                current.remove(at: ci)
+                continue
             }
-        }
-        // Separator between monitored and unmonitored, if both groups present
-        if !monitoredFirst.isEmpty && !unmonitoredAfter.isEmpty {
-            deviceMenu.addItem(NSMenuItem.separator())
-        }
-        // Unmonitored after
-        for uuid in unmonitoredAfter {
-            if let menuItem = deviceDict[uuid] {
-                deviceMenu.addItem(menuItem)
+            if ci >= current.count {
+                // Append remaining desired items
+                deviceMenu.addItem(desired[di])
+                current.append(desired[di])
+                ci += 1; di += 1
+                continue
             }
+            if current[ci] === desired[di] {
+                ci += 1; di += 1
+                continue
+            }
+            // Mismatch: check if the desired item already exists later in current
+            if let later = current[ci...].firstIndex(where: { $0 === desired[di] }) {
+                for _ in ci..<later {
+                    deviceMenu.removeItem(at: devStart + ci)
+                    current.remove(at: ci)
+                }
+                ci += 1; di += 1
+                continue
+            }
+            // Current item is stale
+            deviceMenu.removeItem(at: devStart + ci)
+            current.remove(at: ci)
         }
+
+        // Sync visibility
+        groupSeparatorItem?.isHidden = !wantsSeparator
+        scanningMenuItem?.isHidden = !wantsSeparator
+    }
+
+    /// Toggle the persistent group separator and scanning item visibility.
+    /// Safe to call during NSMenuTrackingSession (only isHidden is touched).
+    func updateGroupSeparatorVisibility() {
+        let monitoredSet = ble.monitoredUUIDs
+        let orderedUUIDs = deviceInsertionOrder.filter { deviceDict[$0] != nil }
+        let hasMonitored = orderedUUIDs.contains(where: { monitoredSet.contains($0) })
+        let hasUnmonitored = orderedUUIDs.contains(where: { !monitoredSet.contains($0) })
+        let shouldShow = hasMonitored && hasUnmonitored
+        groupSeparatorItem?.isHidden = !shouldShow
+        scanningMenuItem?.isHidden = !shouldShow
+    }
+
+    /// Move a single device between groups and update the inter-group separator visibility.
+    /// During menu tracking only the moved item and the separator's isHidden are touched —
+    /// no menu structure changes that would corrupt NSMenuTrackingSession.
+    func moveDeviceInMenu(uuid: UUID, nowMonitored: Bool) {
+        guard let menuItem = deviceDict[uuid] else { return }
+        guard menuItem.menu == deviceMenu else { return }
+        let monitoredSet = ble.monitoredUUIDs
+
+        // ── 1. Find current position of item and separator ──
+        let oldIdx = deviceMenu.index(of: menuItem)
+        var sepIdx: Int?
+        for i in 3..<deviceMenu.numberOfItems {
+            if let item = deviceMenu.item(at: i), item === groupSeparatorItem { sepIdx = i; break }
+        }
+
+        // ── 2. Remove item from its current position ──
+        deviceMenu.removeItem(menuItem)
+        // Adjust separator index if item was before it
+        var adjSepIdx = sepIdx
+        if let si = sepIdx, oldIdx < si { adjSepIdx = si - 1 }
+
+        // ── 3. Compute insert position ──
+        let insertIdx: Int
+        if let si = adjSepIdx {
+            if nowMonitored {
+                insertIdx = si
+            } else {
+                // Insert after the scanning item (right after separator)
+                let scanIdx = scanningMenuItem.flatMap { deviceMenu.index(of: $0) } ?? (si + 1)
+                insertIdx = scanIdx + 1
+            }
+        } else {
+            // Separator exists but was hidden — count visible monitored items
+            var monitoredCount = 0
+            for i in 3..<deviceMenu.numberOfItems {
+                if let item = deviceMenu.item(at: i), !item.isSeparatorItem,
+                   let itemUUID = uuidForMenuItem(item), monitoredSet.contains(itemUUID) {
+                    monitoredCount += 1
+                }
+            }
+            insertIdx = 3 + monitoredCount
+        }
+        deviceMenu.insertItem(menuItem, at: min(insertIdx, deviceMenu.numberOfItems))
+
+        // ── 4. Toggle separator visibility ──
+        let orderedUUIDs = deviceInsertionOrder.filter { deviceDict[$0] != nil }
+        let hasMonitored = orderedUUIDs.contains(where: { monitoredSet.contains($0) })
+        let hasUnmonitored = orderedUUIDs.contains(where: { !monitoredSet.contains($0) })
+        groupSeparatorItem?.isHidden = !(hasMonitored && hasUnmonitored)
+    }
+
+    /// Reverse lookup: find the UUID for a menu item currently in the device menu.
+    private func uuidForMenuItem(_ item: NSMenuItem) -> UUID? {
+        for (uuid, candidate) in deviceDict where candidate === item { return uuid }
+        return nil
     }
 
     func displayedRSSI(for uuid: UUID) -> Int? {
@@ -423,7 +584,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenuItemVa
             monitoredDeviceTitle(uuid: $0).localizedStandardCompare(monitoredDeviceTitle(uuid: $1)) == .orderedAscending
         }
         for uuid in orderedUUIDs where deviceDict[uuid] == nil {
-            let menuItem = deviceMenu.addItem(withTitle: "", action: nil, keyEquivalent: "")
+            let menuItem = addDeviceMenuItem(title: "", uuid: uuid)
             let checkbox = configureDeviceMenuView(menuItem,
                                                    uuid: uuid,
                                                    title: menuItemTitleNotDetected(title: monitoredDeviceTitle(uuid: uuid)))
@@ -435,13 +596,34 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenuItemVa
         }
     }
     
+    /// Add a menu item at the end (non-tracking) or insert it at the correct
+    /// group-relative position when the menu is being tracked. During tracking
+    /// monitored items go before the persistent separator, unmonitored after
+    /// the "Scanning…" indicator.
+    func addDeviceMenuItem(title: String, uuid: UUID) -> NSMenuItem {
+        let item = NSMenuItem(title: title, action: nil, keyEquivalent: "")
+        if deviceMenuIsOpen, let sep = groupSeparatorItem {
+            let sepIdx = deviceMenu.index(of: sep)
+            if ble.isMonitoring(uuid: uuid) {
+                deviceMenu.insertItem(item, at: sepIdx)
+            } else {
+                // Insert after the scanning item (which is right after separator)
+                let scanIdx = scanningMenuItem.flatMap { deviceMenu.index(of: $0) } ?? (sepIdx + 1)
+                deviceMenu.insertItem(item, at: scanIdx + 1)
+            }
+        } else {
+            deviceMenu.addItem(item)
+        }
+        return item
+    }
+
     func newDevice(device: Device) {
         if let checkbox = deviceCheckboxDict[device.uuid] {
             updateDeviceCheckbox(checkbox, uuid: device.uuid, title: menuItemTitle(device: device))
             updateMonitorStatusItems()
             return
         }
-        let menuItem = deviceMenu.addItem(withTitle: "", action:nil, keyEquivalent: "")
+        let menuItem = addDeviceMenuItem(title: "", uuid: device.uuid)
         let checkbox = configureDeviceMenuView(menuItem, uuid: device.uuid, title: menuItemTitle(device: device))
         deviceDict[device.uuid] = menuItem
         deviceCheckboxDict[device.uuid] = checkbox
@@ -449,13 +631,17 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenuItemVa
             deviceInsertionOrder.append(device.uuid)
         }
         updateMonitorStatusItems()
+        scheduleDeviceMenuReorder()
+        if ble.isMonitoring(uuid: device.uuid), device.macAddr != nil {
+            persistDeviceMACs()
+        }
     }
     
     func updateDevice(device: Device) {
         if let checkbox = deviceCheckboxDict[device.uuid] {
             updateDeviceCheckbox(checkbox, uuid: device.uuid, title: menuItemTitle(device: device))
         } else {
-            let menuItem = deviceMenu.addItem(withTitle: "", action: nil, keyEquivalent: "")
+            let menuItem = addDeviceMenuItem(title: "", uuid: device.uuid)
             let checkbox = configureDeviceMenuView(menuItem, uuid: device.uuid, title: menuItemTitle(device: device))
             deviceDict[device.uuid] = menuItem
             deviceCheckboxDict[device.uuid] = checkbox
@@ -464,6 +650,10 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenuItemVa
             }
         }
         updateMonitorStatusItems()
+        scheduleDeviceMenuReorder()
+        if ble.isMonitoring(uuid: device.uuid), device.macAddr != nil {
+            persistDeviceMACs()
+        }
     }
     
     func removeDevice(device: Device) {
@@ -498,12 +688,13 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenuItemVa
         // Preserve insertion order position
         replaceUUIDInInsertionOrder(old: oldUUID, new: newDevice.uuid)
         // Add new menu entry
-        let menuItem = deviceMenu.addItem(withTitle: "", action: nil, keyEquivalent: "")
+        let menuItem = addDeviceMenuItem(title: "", uuid: newDevice.uuid)
         let checkbox = configureDeviceMenuView(menuItem, uuid: newDevice.uuid, title: menuItemTitle(device: newDevice))
         deviceDict[newDevice.uuid] = menuItem
         deviceCheckboxDict[newDevice.uuid] = checkbox
-        performDeviceMenuReorder()
+        scheduleDeviceMenuReorder()
         updateMonitorStatusItems()
+        persistDeviceMACs()
     }
 
     func loadMonitoredUUIDs() -> Set<UUID> {
@@ -521,6 +712,31 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenuItemVa
     func saveMonitoredUUIDs(_ uuids: Set<UUID>) {
         prefs.set(uuids.map(\.uuidString).sorted(), forKey: "devices")
         prefs.removeObject(forKey: "device")
+        persistDeviceMACs()
+    }
+
+    /// Persist known MAC addresses for currently‑monitored devices so they survive
+    /// app restarts and UUID rotations.
+    func persistDeviceMACs() {
+        var dict: [String: String] = [:]
+        for uuid in ble.monitoredUUIDs {
+            if let mac = ble.devices[uuid]?.macAddr {
+                dict[uuid.uuidString] = mac
+            }
+        }
+        prefs.set(dict, forKey: "deviceMACs")
+    }
+
+    /// Load MAC addresses persisted from a previous session.
+    func loadPersistedMACs() -> [UUID: String] {
+        guard let dict = prefs.dictionary(forKey: "deviceMACs") as? [String: String] else { return [:] }
+        var result: [UUID: String] = [:]
+        for (key, mac) in dict {
+            if let uuid = UUID(uuidString: key) {
+                result[uuid] = mac
+            }
+        }
+        return result
     }
 
     func refreshDeviceMenuSelectionStates() {
@@ -1260,7 +1476,12 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenuItemVa
             uuids.insert(uuid)
         }
         saveMonitoredUUIDs(uuids)
+        persistDeviceMACs()
         monitorDevices(uuids: uuids)
+        // If menu is open, move the toggled item in real time
+        if deviceMenuIsOpen {
+            moveDeviceInMenu(uuid: uuid, nowMonitored: uuids.contains(uuid))
+        }
     }
 
     func monitorDevice(uuid: UUID) {
@@ -1746,7 +1967,11 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenuItemVa
         )
         deviceMenu.addItem(hint)
         deviceMenu.addItem(NSMenuItem.separator())
-        deviceMenu.addItem(withTitle: t("scanning"), action: nil, keyEquivalent: "")
+        // "Scanning…" is now managed by performDeviceMenuReorder (placed below group separator)
+        let scanItem = NSMenuItem(title: t("scanning"), action: nil, keyEquivalent: "")
+        scanItem.isEnabled = false
+        deviceMenu.addItem(scanItem)
+        scanningMenuItem = scanItem
 
         let unlockSettingsItem = mainMenu.addItem(withTitle: t("unlock_settings"), action: nil, keyEquivalent: "")
         unlockSettingsItem.submenu = unlockSettingsMenu

@@ -712,7 +712,7 @@ class BLE: NSObject, CBCentralManagerDelegate, CBPeripheralDelegate {
         device.scanTimer = Timer.scheduledTimer(withTimeInterval: signalTimeout, repeats: false, block: { [weak self, weak device] _ in
             guard let self = self, let device = device else { return }
             device.isVisible = false
-            self.delegate?.removeDevice(device: device)
+            DispatchQueue.main.async { [weak self] in self?.delegate?.removeDevice(device: device) }
             if let p = device.peripheral, !self.isMonitoring(uuid: device.uuid) {
                 self.centralMgr.cancelPeripheralConnection(p)
             }
@@ -825,9 +825,11 @@ class BLE: NSObject, CBCentralManagerDelegate, CBPeripheralDelegate {
                     if let mac = device.macAddr, let matched = findKnownDeviceByMAC(newMAC: mac, knownDevices: devices.filter { $0.key != peripheral.identifier }) {
                         print("Late correlation: merging \(peripheral.identifier) into \(matched.uuid)")
                         devices.removeValue(forKey: matched.uuid)
-                        delegate?.mergeDevice(oldUUID: matched.uuid, newDevice: device)
+                        DispatchQueue.main.async { [weak self] in
+                            self?.delegate?.mergeDevice(oldUUID: matched.uuid, newDevice: device)
+                        }
                     } else {
-                        delegate?.newDevice(device: device)
+                        DispatchQueue.main.async { [weak self] in self?.delegate?.newDevice(device: device) }
                     }
                     
                     device.logNameResolutionIfNeeded(context: "discover:new")
@@ -849,10 +851,12 @@ class BLE: NSObject, CBCentralManagerDelegate, CBPeripheralDelegate {
                 if !hadMAC, let mac = device.macAddr, let matched = findKnownDeviceByMAC(newMAC: mac, knownDevices: devices.filter { $0.key != peripheral.identifier }) {
                     print("Late correlation (update): merging \(peripheral.identifier) into \(matched.uuid)")
                     devices.removeValue(forKey: matched.uuid)
-                    delegate?.mergeDevice(oldUUID: matched.uuid, newDevice: device)
+                    DispatchQueue.main.async { [weak self] in
+                        self?.delegate?.mergeDevice(oldUUID: matched.uuid, newDevice: device)
+                    }
                 } else {
                     device.logNameResolutionIfNeeded(context: "discover:update")
-                    delegate?.updateDevice(device: device)
+                    DispatchQueue.main.async { [weak self] in self?.delegate?.updateDevice(device: device) }
                 }
             }
             if let device = device {
@@ -951,12 +955,12 @@ class BLE: NSObject, CBCentralManagerDelegate, CBPeripheralDelegate {
                     if characteristic.uuid == ManufacturerName {
                         device.manufacture = s
                         device.logNameResolutionIfNeeded(context: "characteristic:manufacturer")
-                        delegate?.updateDevice(device: device)
+                        DispatchQueue.main.async { [weak self] in self?.delegate?.updateDevice(device: device) }
                     }
                     if characteristic.uuid == ModelName {
                         device.model = s
                         device.logNameResolutionIfNeeded(context: "characteristic:model")
-                        delegate?.updateDevice(device: device)
+                        DispatchQueue.main.async { [weak self] in self?.delegate?.updateDevice(device: device) }
                     }
                     if device.manufacture != nil && device.model != nil && !isMonitoring(uuid: device.uuid) {
                         centralMgr.cancelPeripheralConnection(peripheral)

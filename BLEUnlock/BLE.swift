@@ -89,15 +89,25 @@ func getNameFromMAC(_ mac: String) -> String? {
 
 
 /// Cross-reference a newly discovered device against known devices via MAC address.
+/// Normalize a MAC address string to canonical form: lowercase with dashes.
+func canonicalMAC(_ mac: String) -> String {
+    var s = mac.lowercased()
+    s = s.replacingOccurrences(of: ":", with: "-")
+    s = s.replacingOccurrences(of: ".", with: "-")
+    while s.contains("--") { s = s.replacingOccurrences(of: "--", with: "-") }
+    return s.trimmingCharacters(in: CharacterSet(charactersIn: "-"))
+}
+
 func findKnownDeviceByMAC(newMAC: String?, knownDevices: [UUID: Device]) -> Device? {
     guard let newMAC = newMAC else { return nil }
+    let normalized = canonicalMAC(newMAC)
     for (_, device) in knownDevices {
-        if let knownMAC = device.macAddr, knownMAC.caseInsensitiveCompare(newMAC) == .orderedSame {
+        if let knownMAC = device.macAddr, canonicalMAC(knownMAC) == normalized {
             return device
         }
         if let knownInfo = getLEDeviceInfoFromUUID(device.uuid.uuidString),
            let knownMAC2 = knownInfo.macAddr,
-           knownMAC2.caseInsensitiveCompare(newMAC) == .orderedSame {
+           canonicalMAC(knownMAC2) == normalized {
             return device
         }
     }

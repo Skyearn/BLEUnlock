@@ -681,8 +681,9 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenuItemVa
                 if mac != nil { device.macAddr = mac }
             }
             if let mac = mac {
+                let normalized = canonicalMAC(mac)
                 for (monUUID, monDev) in ble.devices where ble.isMonitoring(uuid: monUUID) {
-                    if monDev.macAddr?.caseInsensitiveCompare(mac) == .orderedSame {
+                    if let m = monDev.macAddr, canonicalMAC(m) == normalized {
                         mergeDevice(oldUUID: monUUID, newDevice: device)
                         return
                     }
@@ -818,7 +819,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenuItemVa
         let monitoredUUIDStrings = Set(ble.monitoredUUIDs.map { $0.uuidString })
         for uuid in ble.monitoredUUIDs {
             guard let mac = ble.devices[uuid]?.macAddr else { continue }
-            dict[mac] = uuid.uuidString
+            dict[canonicalMAC(mac)] = uuid.uuidString
         }
         // Prune entries for UUIDs that are no longer monitored
         dict = dict.filter { _, uuidStr in monitoredUUIDStrings.contains(uuidStr) }

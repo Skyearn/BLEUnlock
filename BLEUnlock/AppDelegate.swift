@@ -165,6 +165,8 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenuItemVa
     var monitorDetailItems: [UUID: NSMenuItem] = [:]
     var monitorMenuItem : NSMenuItem?
     var lockNowMenuItem: NSMenuItem?
+    /// Serial queue for ServiceManagement XPC calls to avoid concurrent smd requests.
+    let smdQueue = DispatchQueue(label: "com.github.Skyearn.BLEUnlock.smd")
     let prefs = UserDefaults.standard
     var displaySleep = false
     var systemSleep = false
@@ -1699,7 +1701,6 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenuItemVa
 
     func migrateLegacyAppDataIfNeeded() {
         migrateLegacyDefaultsIfNeeded()
-        disableLegacyLoginItems()
     }
     
     @objc func askPassword() {
@@ -2087,7 +2088,13 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenuItemVa
         item.state = prefs.bool(forKey: "passiveMode") ? .on : .off
         
         item = mainMenu.addItem(withTitle: t("launch_at_login"), action: #selector(toggleLaunchAtLogin), keyEquivalent: "")
-        item.state = isLaunchAtLoginEnabled() ? .on : .off
+        // Defer smd XPC to serial queue to avoid blocking main thread / concurrent smd calls.
+        item.state = .off
+        smdQueue.async { [weak self, weak item] in
+            guard let self else { return }
+            let enabled = self.isLaunchAtLoginEnabled()
+            DispatchQueue.main.async { item?.state = enabled ? .on : .off }
+        }
         
         mainMenu.addItem(withTitle: t("set_rssi_threshold"), action: #selector(setRSSIThreshold),
                          keyEquivalent: "")
@@ -2221,6 +2228,10 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenuItemVa
 
     func applicationDidFinishLaunching(_ aNotification: Notification) {
         migrateLegacyAppDataIfNeeded()
+        // Offload smd XPC to serial queue; must precede constructMenu so serial order is correct.
+        smdQueue.async { [weak self] in
+            self?.disableLegacyLoginItems()
+        }
 
         if let button = statusItem.button {
             button.image = NSImage(named: "StatusBarDisconnected")
@@ -2294,7 +2305,10 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenuItemVa
             askPassword()
         }
         if prefs.bool(forKey: "launchAtLogin") {
-            _ = setLaunchAtLogin(true, showErrors: false)
+            // setLaunchAtLogin may block on smd XPC; use serial queue to avoid concurrent smd calls.
+            smdQueue.async { [weak self] in
+                _ = self?.setLaunchAtLogin(true, showErrors: false)
+            }
         }
         startPermissionRecovery(promptAccessibility: true)
         runAutomaticUpdateCheck()

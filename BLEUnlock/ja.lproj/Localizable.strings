@@ -50,5 +50,4 @@
 "use_screensaver_to_lock" = "スクリーンセーバーでロック";
 "wake_on_proximity" = "画面スリープから復帰";
 "wake_without_unlocking" = "アンロックせずに画面復帰";
-"pair_for_mac_hint" = "システム設定 → BluetoothでペアリングするとMACアドレスが表示されます";
-"pair_for_mac_hint" = "システム設定 → BluetoothでペアリングするとMACアドレスで安定した追跡が可能";
+"pair_for_mac_hint" = "ペアリングでランダムアドレスを安定追跡 →";

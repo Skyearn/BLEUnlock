@@ -40,4 +40,4 @@
 "use_screensaver_to_lock" = "Använd skärmsläckare för att låsa";
 "wake_on_proximity" = "Väck om i närheten";
 "wake_without_unlocking" = "Vakna utan att låsa upp";
-"pair_for_mac_hint" = "Pair device in System Settings → Bluetooth for stable tracking with MAC address";
+"pair_for_mac_hint" = "Pair to stabilize random address tracking →";

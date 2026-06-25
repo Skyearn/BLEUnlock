@@ -63,4 +63,4 @@
 "use_screensaver_to_lock" = "Use Screensaver to Lock";
 "wake_on_proximity" = "Wake on Proximity";
 "wake_without_unlocking" = "Wake without Unlocking";
-"pair_for_mac_hint" = "Pair device in System Settings → Bluetooth for stable tracking with MAC address";
+"pair_for_mac_hint" = "Pair to stabilize random address tracking →";

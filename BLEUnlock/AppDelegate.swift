@@ -183,6 +183,9 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenuItemVa
     var deviceMenuIsOpen = false
     var deviceMenuNeedsReorder = false
     var deviceMenuNeedsRefresh = false
+    var deviceMenuShowDetails = false
+    var flagsEventMonitor: Any?
+    var deviceMaxTitleWidth: [UUID: CGFloat] = [:]
     var automationPermissionPromptedApps: Set<ManagedMediaApp> = []
     let mediaControlQueue = DispatchQueue(label: "com.github.Skyearn.BLEUnlock.media-control", qos: .userInitiated)
     var systemWakeTimer: Timer?
@@ -208,6 +211,21 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenuItemVa
             ensureGroupSeparatorExists()
             performDeviceMenuReorder()
             deviceMenuIsOpen = true
+            // Option-key toggle: check initial state before starting scan
+            let initialOption = NSEvent.modifierFlags.contains(.option)
+            if deviceMenuShowDetails != initialOption {
+                deviceMenuShowDetails = initialOption
+                refreshAllDeviceTitles()
+            }
+            flagsEventMonitor = NSEvent.addLocalMonitorForEvents(matching: .flagsChanged) { [weak self] event in
+                guard let self = self, self.deviceMenuIsOpen else { return event }
+                let newState = event.modifierFlags.contains(.option)
+                if self.deviceMenuShowDetails != newState {
+                    self.deviceMenuShowDetails = newState
+                    self.refreshAllDeviceTitles()
+                }
+                return event
+            }
             ble.startScanning()
         } else if menu == unlockSettingsMenu {
             updateSettingsMenu(menu,
@@ -240,6 +258,24 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenuItemVa
         }
     }
 
+    func deviceListAttributedTitle() -> NSAttributedString {
+        let title = t("device") + "\t⌥"
+        let para = NSMutableParagraphStyle()
+        para.tabStops = [NSTextTab(textAlignment: .right, location: 185)]
+        let attr = NSMutableAttributedString(string: title, attributes: [
+            .paragraphStyle: para,
+            .font: NSFont.menuFont(ofSize: 0)
+        ])
+        let optRange = (title as NSString).range(of: "⌥")
+        attr.addAttribute(.foregroundColor, value: NSColor.secondaryLabelColor, range: optRange)
+        return attr
+    }
+
+    @objc func openBluetoothSettings() {
+        let url = URL(string: "x-apple.systempreferences:com.apple.BluetoothSettings")!
+        NSWorkspace.shared.open(url)
+    }
+
     func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
         if let kind = menuItem.representedObject as? String {
             if kind == unlockLogicMenuItemKind || kind == lockLogicMenuItemKind {
@@ -262,16 +298,40 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenuItemVa
             ble.stopScanning()
             refreshDeviceMenuSelectionStates(removeStale: true)
             performDeviceMenuReorder()
+            if let monitor = flagsEventMonitor {
+                NSEvent.removeMonitor(monitor)
+                flagsEventMonitor = nil
+            }
+            deviceMenuShowDetails = false
+            deviceMaxTitleWidth.removeAll()
         }
     }
     
-    func menuItemTitle(device: Device) -> String {
+    func menuItemTitle(device: Device, showDetails: Bool = false) -> String {
+        let name = device.currentResolvedName()
+        let hasName = name != nil
+        let uuidStr = device.uuid.uuidString
+        let segments = uuidStr.split(separator: "-")
+        let collapsed = String(segments.first ?? "") + "…" + String(segments.last ?? "")
+
         var desc : String!
-        if let mac = device.macAddr {
-            let prettifiedMac = mac.replacingOccurrences(of: "-", with: ":").uppercased()
-            desc = String(format: "%@ (%@) (%@)", device.description, prettifiedMac, String(device.uuid.uuidString.prefix(8)))
+        if showDetails {
+            if let mac = device.macAddr {
+                let prettifiedMac = mac.replacingOccurrences(of: "-", with: ":").uppercased()
+                desc = String(format: "%@ (%@) (%@)", device.description, prettifiedMac, uuidStr)
+            } else {
+                if hasName {
+                    desc = String(format: "%@ (%@)", device.description, uuidStr)
+                } else {
+                    desc = uuidStr
+                }
+            }
         } else {
-            desc = device.description
+            if hasName {
+                desc = device.description
+            } else {
+                desc = collapsed
+            }
         }
         if let rssi = displayedRSSI(for: device.uuid) {
             return menuItemTitle(title: desc, rssi: rssi)
@@ -302,13 +362,13 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenuItemVa
                 deviceMenu.removeItem(at: i)
             }
         }
-        // Insert hint at top, before everything
-        let hint = NSMenuItem(title: t("pair_for_mac_hint"), action: nil, keyEquivalent: "")
-        hint.isEnabled = false
+        // Insert hint at top, before everything — click to open Bluetooth settings
+        let hint = NSMenuItem(title: t("pair_for_mac_hint"), action: #selector(openBluetoothSettings), keyEquivalent: "")
+        hint.target = self
         hint.tag = 999
         hint.attributedTitle = NSAttributedString(
             string: t("pair_for_mac_hint"),
-            attributes: [.foregroundColor: NSColor.secondaryLabelColor, .font: NSFont.systemFont(ofSize: NSFont.smallSystemFontSize)]
+            attributes: [.font: NSFont.menuFont(ofSize: 0)]
         )
         deviceMenu.insertItem(hint, at: 0)
         deviceMenu.insertItem(NSMenuItem.separator(), at: 1)
@@ -572,11 +632,18 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenuItemVa
         return checkbox
     }
 
+    func menuItemWidth(for title: String) -> CGFloat {
+        let attrs: [NSAttributedString.Key: Any] = [.font: NSFont.menuFont(ofSize: 0)]
+        return (title as NSString).size(withAttributes: attrs).width
+    }
+
     func configureDeviceMenuView(_ menuItem: NSMenuItem, uuid: UUID, title: String) -> NSButton {
         let checkbox = configuredDeviceCheckbox(uuid: uuid, title: title)
         let fittingSize = checkbox.fittingSize
         let height = max(24, fittingSize.height + 4)
-        let width = max(300, fittingSize.width + 28)
+        let currentWidth = max(300, fittingSize.width + 28)
+        // Use cached max width if available to keep menu width stable
+        let width = deviceMaxTitleWidth[uuid] ?? currentWidth
         let container = NSView(frame: NSRect(x: 0, y: 0, width: width, height: height))
         checkbox.frame = NSRect(x: 14, y: (height - fittingSize.height) / 2, width: fittingSize.width, height: fittingSize.height)
         container.addSubview(checkbox)
@@ -591,7 +658,14 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenuItemVa
         let fittingSize = checkbox.fittingSize
         if let container = checkbox.superview {
             let height = max(24, fittingSize.height + 4)
-            let width = max(300, fittingSize.width + 28)
+            let currentWidth = max(300, fittingSize.width + 28)
+            // Use cached max width if available; always update cache
+            if let cached = deviceMaxTitleWidth[uuid] {
+                deviceMaxTitleWidth[uuid] = max(cached, currentWidth)
+            } else {
+                deviceMaxTitleWidth[uuid] = currentWidth
+            }
+            let width = deviceMaxTitleWidth[uuid]!
             container.frame.size = NSSize(width: width, height: height)
             checkbox.frame = NSRect(x: 14, y: (height - fittingSize.height) / 2, width: fittingSize.width, height: fittingSize.height)
         }
@@ -636,7 +710,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenuItemVa
 
     func newDevice(device: Device) {
         if let checkbox = deviceCheckboxDict[device.uuid] {
-            updateDeviceCheckbox(checkbox, uuid: device.uuid, title: menuItemTitle(device: device))
+            updateDeviceCheckbox(checkbox, uuid: device.uuid, title: menuItemTitle(device: device, showDetails: deviceMenuShowDetails))
             updateMonitorStatusItems()
             return
         }
@@ -681,7 +755,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenuItemVa
             }
         }
         let menuItem = addDeviceMenuItem(title: "", uuid: device.uuid)
-        let checkbox = configureDeviceMenuView(menuItem, uuid: device.uuid, title: menuItemTitle(device: device))
+        let checkbox = configureDeviceMenuView(menuItem, uuid: device.uuid, title: menuItemTitle(device: device, showDetails: deviceMenuShowDetails))
         deviceDict[device.uuid] = menuItem
         deviceCheckboxDict[device.uuid] = checkbox
         if !deviceInsertionOrder.contains(device.uuid) {
@@ -697,10 +771,10 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenuItemVa
     func updateDevice(device: Device) {
         macInheritLog("updateDevice: uuid=\(device.uuid.uuidString) mac=\(device.macAddr ?? "nil") isMonitored=\(ble.isMonitoring(uuid: device.uuid))")
         if let checkbox = deviceCheckboxDict[device.uuid] {
-            updateDeviceCheckbox(checkbox, uuid: device.uuid, title: menuItemTitle(device: device))
+            updateDeviceCheckbox(checkbox, uuid: device.uuid, title: menuItemTitle(device: device, showDetails: deviceMenuShowDetails))
         } else {
             let menuItem = addDeviceMenuItem(title: "", uuid: device.uuid)
-            let checkbox = configureDeviceMenuView(menuItem, uuid: device.uuid, title: menuItemTitle(device: device))
+            let checkbox = configureDeviceMenuView(menuItem, uuid: device.uuid, title: menuItemTitle(device: device, showDetails: deviceMenuShowDetails))
             deviceDict[device.uuid] = menuItem
             deviceCheckboxDict[device.uuid] = checkbox
             if !deviceInsertionOrder.contains(device.uuid) {
@@ -719,7 +793,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenuItemVa
             if let checkbox = deviceCheckboxDict[device.uuid] {
                 let title: String
                 if displayedRSSI(for: device.uuid) != nil {
-                    title = menuItemTitle(device: device)
+                    title = menuItemTitle(device: device, showDetails: deviceMenuShowDetails)
                 } else {
                     title = menuItemTitleNotDetected(device: device)
                 }
@@ -755,7 +829,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenuItemVa
             deviceDict.removeValue(forKey: oldUUID)
             deviceDict[newDevice.uuid] = oldItem
             if let checkbox = deviceCheckboxDict.removeValue(forKey: oldUUID) {
-                updateDeviceCheckbox(checkbox, uuid: newDevice.uuid, title: menuItemTitle(device: newDevice))
+                updateDeviceCheckbox(checkbox, uuid: newDevice.uuid, title: menuItemTitle(device: newDevice, showDetails: deviceMenuShowDetails))
                 deviceCheckboxDict[newDevice.uuid] = checkbox
             }
             updateMonitorStatusItems()
@@ -776,7 +850,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenuItemVa
         deviceCheckboxDict.removeValue(forKey: newDevice.uuid)
         // Add new menu entry
         let menuItem = addDeviceMenuItem(title: "", uuid: newDevice.uuid)
-        let checkbox = configureDeviceMenuView(menuItem, uuid: newDevice.uuid, title: menuItemTitle(device: newDevice))
+        let checkbox = configureDeviceMenuView(menuItem, uuid: newDevice.uuid, title: menuItemTitle(device: newDevice, showDetails: deviceMenuShowDetails))
         deviceDict[newDevice.uuid] = menuItem
         deviceCheckboxDict[newDevice.uuid] = checkbox
         scheduleDeviceMenuReorder()
@@ -826,6 +900,17 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenuItemVa
     }
 
 
+    /// Refresh all device menu item titles (called on Option-key toggle).
+    func refreshAllDeviceTitles() {
+        for (uuid, _) in deviceDict {
+            if let device = ble.devices[uuid], let checkbox = deviceCheckboxDict[uuid] {
+                updateDeviceCheckbox(checkbox, uuid: uuid, title: menuItemTitle(device: device, showDetails: deviceMenuShowDetails))
+            }
+        }
+        deviceMenu.minimumWidth = 0
+        deviceMenu.update()
+    }
+
     func refreshDeviceMenuSelectionStates(removeStale: Bool = true) {
         ensureMonitoredDeviceMenuItems()
         var staleUUIDs: [UUID] = []
@@ -836,7 +921,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenuItemVa
                 if !monitoring && !device.isVisible {
                     staleUUIDs.append(uuid)
                 } else if let checkbox = deviceCheckboxDict[uuid] {
-                    updateDeviceCheckbox(checkbox, uuid: uuid, title: menuItemTitle(device: device))
+                    updateDeviceCheckbox(checkbox, uuid: uuid, title: menuItemTitle(device: device, showDetails: deviceMenuShowDetails))
                 }
             } else if let checkbox = deviceCheckboxDict[uuid] {
                 if monitoring {
@@ -2042,16 +2127,17 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenuItemVa
         lockNowMenuItem = item
         mainMenu.addItem(NSMenuItem.separator())
 
-        item = mainMenu.addItem(withTitle: t("device"), action: nil, keyEquivalent: "")
+        item = mainMenu.addItem(withTitle: "", action: nil, keyEquivalent: "")
+        item.attributedTitle = deviceListAttributedTitle()
         item.submenu = deviceMenu
         deviceMenu.delegate = self
         // Hint at top (static, never reordered)
-        let hint = NSMenuItem(title: t("pair_for_mac_hint"), action: nil, keyEquivalent: "")
-        hint.isEnabled = false
+        let hint = NSMenuItem(title: t("pair_for_mac_hint"), action: #selector(openBluetoothSettings), keyEquivalent: "")
+        hint.target = self
         hint.tag = 999
         hint.attributedTitle = NSAttributedString(
             string: t("pair_for_mac_hint"),
-            attributes: [.foregroundColor: NSColor.secondaryLabelColor, .font: NSFont.systemFont(ofSize: NSFont.smallSystemFontSize)]
+            attributes: [.font: NSFont.menuFont(ofSize: 0)]
         )
         deviceMenu.addItem(hint)
         deviceMenu.addItem(NSMenuItem.separator())

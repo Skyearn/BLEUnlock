@@ -63,5 +63,4 @@
 "use_screensaver_to_lock" = "用屏保来锁定它";
 "wake_on_proximity" = "靠近唤醒";
 "wake_without_unlocking" = "唤醒时不需解锁";
-"pair_for_mac_hint" = "在系统设置 → 蓝牙中配对设备以显示 MAC 地址";
-"pair_for_mac_hint" = "在系统设置 → 蓝牙中配对设备，通过 MAC 地址实现稳定追踪随机 UUID";
+"pair_for_mac_hint" = "配对以稳定追踪随机地址 →";

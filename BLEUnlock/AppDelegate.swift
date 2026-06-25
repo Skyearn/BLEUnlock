@@ -486,7 +486,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenuItemVa
 
         // Sync visibility
         groupSeparatorItem?.isHidden = !wantsSeparator
-        scanningMenuItem?.isHidden = !wantsSeparator
+        scanningMenuItem?.isHidden = unmonitoredAfter.isEmpty
     }
 
     /// Toggle the persistent group separator and scanning item visibility.
@@ -498,7 +498,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenuItemVa
         let hasUnmonitored = orderedUUIDs.contains(where: { !monitoredSet.contains($0) })
         let shouldShow = hasMonitored && hasUnmonitored
         groupSeparatorItem?.isHidden = !shouldShow
-        scanningMenuItem?.isHidden = !shouldShow
+        scanningMenuItem?.isHidden = !hasUnmonitored
     }
 
     /// Move a single device between groups and update the inter-group separator visibility.
@@ -512,7 +512,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenuItemVa
         // ── 1. Find current position of item and separator ──
         let oldIdx = deviceMenu.index(of: menuItem)
         var sepIdx: Int?
-        for i in 3..<deviceMenu.numberOfItems {
+        for i in 2..<deviceMenu.numberOfItems {
             if let item = deviceMenu.item(at: i), item === groupSeparatorItem { sepIdx = i; break }
         }
 
@@ -550,7 +550,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenuItemVa
         let hasMonitored = orderedUUIDs.contains(where: { monitoredSet.contains($0) })
         let hasUnmonitored = orderedUUIDs.contains(where: { !monitoredSet.contains($0) })
         groupSeparatorItem?.isHidden = !(hasMonitored && hasUnmonitored)
-        scanningMenuItem?.isHidden = !(hasMonitored && hasUnmonitored)
+        scanningMenuItem?.isHidden = !hasUnmonitored
     }
 
     /// Reverse lookup: find the UUID for a menu item currently in the device menu.

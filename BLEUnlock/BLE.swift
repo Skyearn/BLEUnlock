@@ -889,8 +889,6 @@ class BLE: NSObject, CBCentralManagerDelegate, CBPeripheralDelegate {
                 }
                 var mergedViaMAC = false
                 if let resolvedMAC = resolvedMAC, let matchedDevice = findKnownDeviceByMAC(newMAC: resolvedMAC, knownDevices: devices) {
-                    // DIAGNOSTIC: log merge decision details
-                    macInheritLog(" MERGE-CHECK: new=\(peripheral.identifier.uuidString) mac=\(resolvedMAC) old=\(matchedDevice.uuid.uuidString) oldVisible=\(matchedDevice.isVisible) oldMonitored=\(isMonitoring(uuid: matchedDevice.uuid)) oldMAC=\(matchedDevice.macAddr ?? "nil")")
                     // If old UUID is still visible and monitored, skip merge — retry later
                     // when it goes invisible so remapMonitoredUUID can succeed.
                     // Premature merge breaks future remap: old UUID gets removed from
@@ -984,7 +982,6 @@ class BLE: NSObject, CBCentralManagerDelegate, CBPeripheralDelegate {
                 // UUID if it broadcasts the same MAC.
                 var didLateCorrelate = false
                 if let mac = device.macAddr, let matched = findKnownDeviceByMAC(newMAC: mac, knownDevices: devices.filter { $0.key != peripheral.identifier }) {
-                    macInheritLog(" LATE-CHECK: uuid=\(peripheral.identifier.uuidString) mac=\(mac) matched=\(matched.uuid.uuidString) matchedVisible=\(matched.isVisible) matchedMonitored=\(isMonitoring(uuid: matched.uuid))")
                     if !isMonitoring(uuid: matched.uuid) || !matched.isVisible {
                         // Old UUID is either unmonitored or invisible → safe to merge + remap
                         macInheritLog(" Late-correlation(update): merging \(peripheral.identifier) -> \(matched.uuid)")

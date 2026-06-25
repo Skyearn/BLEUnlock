@@ -672,8 +672,9 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenuItemVa
                 for (monUUID, monDev) in ble.devices where ble.isMonitoring(uuid: monUUID) {
                     if let m = monDev.macAddr, canonicalMAC(m) == normalized {
                         macInheritLog("newDevice: MERGE \(device.uuid.uuidString) (MAC=\(mac)) into monitored \(monUUID.uuidString) (MAC=\(m))")
-                        ble.remapMonitoredUUID(from: monUUID, to: device.uuid, peripheral: device.peripheral)
-                        replaceMonitoredDevice(oldUUID: monUUID, with: device)
+                        if ble.remapMonitoredUUID(from: monUUID, to: device.uuid, peripheral: device.peripheral) {
+                            replaceMonitoredDevice(oldUUID: monUUID, with: device)
+                        }
                         return
                     }
                 }

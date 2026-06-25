@@ -442,8 +442,12 @@ class BLE: NSObject, CBCentralManagerDelegate, CBPeripheralDelegate {
 
     /// Remap monitored UUID when a physical device's UUID rotates (e.g. privacy rotation).
     /// Transfers monitoredState to the new peripheral and persists the updated set.
-    func remapMonitoredUUID(from oldUUID: UUID, to newUUID: UUID, peripheral: CBPeripheral?) {
-        guard isMonitoring(uuid: oldUUID) else { return }
+    @discardableResult
+    func remapMonitoredUUID(from oldUUID: UUID, to newUUID: UUID, peripheral: CBPeripheral?) -> Bool {
+        guard isMonitoring(uuid: oldUUID) else { return false }
+        // Only remap when the old UUID is no longer visible — if it's still
+        // being detected, keep tracking it to prevent flip-flop.
+        guard let dev = devices[oldUUID], !dev.isVisible else { return false }
         var updatedUUIDs = monitoredUUIDs
         updatedUUIDs.remove(oldUUID)
         updatedUUIDs.insert(newUUID)
@@ -455,6 +459,7 @@ class BLE: NSObject, CBCentralManagerDelegate, CBPeripheralDelegate {
         UserDefaults.standard.set(monitoredUUIDs.map { $0.uuidString }, forKey: "devices")
         macInheritLog(" remapMonitoredUUID: \(oldUUID) -> \(newUUID)")
         print("Remapped monitoring from \(oldUUID) to \(newUUID)")
+        return true
     }
 
 
@@ -882,12 +887,14 @@ class BLE: NSObject, CBCentralManagerDelegate, CBPeripheralDelegate {
                     print("MAC correlation: merged UUID \(matchedDevice.uuid) → \(peripheral.identifier)")
                     
                     // Remap monitoring if needed
-                    remapMonitoredUUID(from: matchedDevice.uuid, to: peripheral.identifier, peripheral: peripheral)
+                    let didRemap = remapMonitoredUUID(from: matchedDevice.uuid, to: peripheral.identifier, peripheral: peripheral)
                     
                     // Remove old UUID and add new via merge (preserves menu order)
                     devices.removeValue(forKey: matchedDevice.uuid)
                     devices[peripheral.identifier] = device
-                    delegate?.replaceMonitoredDevice(oldUUID: matchedDevice.uuid, with: device)
+                    if didRemap {
+                        delegate?.replaceMonitoredDevice(oldUUID: matchedDevice.uuid, with: device)
+                    }
                     
                     central.connect(peripheral, options: nil)
                     device.logNameResolutionIfNeeded(context: "discover:merged")
@@ -913,9 +920,9 @@ class BLE: NSObject, CBCentralManagerDelegate, CBPeripheralDelegate {
                         macInheritLog(" Late-correlation(new): merging \(peripheral.identifier) -> \(matched.uuid)")
                         print("Late correlation: merging \(peripheral.identifier) into \(matched.uuid)")
                         devices.removeValue(forKey: matched.uuid)
-                        remapMonitoredUUID(from: matched.uuid, to: peripheral.identifier, peripheral: peripheral)
+                        let dr = remapMonitoredUUID(from: matched.uuid, to: peripheral.identifier, peripheral: peripheral)
                         DispatchQueue.main.async { [weak self] in
-                            self?.delegate?.replaceMonitoredDevice(oldUUID: matched.uuid, with: device)
+                            if dr { self?.delegate?.replaceMonitoredDevice(oldUUID: matched.uuid, with: device) }
                         }
                     } else {
                         DispatchQueue.main.async { [weak self] in self?.delegate?.newDevice(device: device) }
@@ -941,9 +948,9 @@ class BLE: NSObject, CBCentralManagerDelegate, CBPeripheralDelegate {
                     macInheritLog(" Late-correlation(update): merging \(peripheral.identifier) -> \(matched.uuid)")
                     print("Late correlation (update): merging \(peripheral.identifier) into \(matched.uuid)")
                     devices.removeValue(forKey: matched.uuid)
-                    remapMonitoredUUID(from: matched.uuid, to: peripheral.identifier, peripheral: peripheral)
+                    let dr = remapMonitoredUUID(from: matched.uuid, to: peripheral.identifier, peripheral: peripheral)
                     DispatchQueue.main.async { [weak self] in
-                        self?.delegate?.replaceMonitoredDevice(oldUUID: matched.uuid, with: device)
+                        if dr { self?.delegate?.replaceMonitoredDevice(oldUUID: matched.uuid, with: device) }
                     }
                 } else {
                     device.logNameResolutionIfNeeded(context: "discover:update")

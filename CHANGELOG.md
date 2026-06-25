@@ -1,5 +1,13 @@
 # Release Notes
 
+## 1.14.3
+
+- **Feat:** Android / Pixel support via manual Bluetooth IRK import — resolves rotating `Android-XXXX` BLE addresses to a stable MAC for monitoring.
+- **Feat:** **Import Bluetooth IRK…** menu walks through Keychain Access paste import; IRKs are stored locally (no repeated System keychain reads).
+- **Fix:** Stale UUID merge when a monitored device rotates its BLE privacy address.
+- **Fix:** Launch at Login uses `launchctl bootstrap` / `bootout` instead of deprecated `load -w` / SMAppService-only registration.
+- **Fix:** Launcher helper resolves the correct `.app` bundle path (four levels up from `LoginItems`).
+
 ## 1.14.2
 
 - **Fix:** RSSI signal display is more stable — switched from 5-sample moving average to median-of-3 filter. Single outliers are completely eliminated, while real signal changes track with lower latency.

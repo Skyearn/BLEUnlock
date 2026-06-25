@@ -64,3 +64,13 @@
 "wake_on_proximity" = "Wake on Proximity";
 "wake_without_unlocking" = "Wake without Unlocking";
 "pair_for_mac_hint" = "Pair to stabilize random address tracking →";
+"import_bluetooth_irk" = "Import Bluetooth IRK…";
+"import_irk_title" = "Import Bluetooth IRK";
+"import_irk_info" = "1. Open Keychain Access → System keychain\n2. Search \"BluetoothLE\"\n3. Open the entry whose Account is \"Public\" followed by your device MAC\n4. Check Show password, authenticate once, and copy the XML\n5. Paste below and click Import\n\nBLEUnlock stores the IRK locally — it will not read the System keychain again.";
+"import_irk_device" = "Device:";
+"import_irk_paste" = "Paste Keychain XML or Remote IRK (base64/hex):";
+"import_irk_open_keychain" = "Open Keychain Access";
+"import_irk_button" = "Import";
+"import_irk_success" = "Imported IRK for %1$@ (%2$@). Restart scanning or reopen the device menu.";
+"import_irk_failed" = "Import Failed";
+"import_irk_no_devices" = "No paired Bluetooth devices found. Pair your phone in System Settings first.";

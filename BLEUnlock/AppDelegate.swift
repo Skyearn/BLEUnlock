@@ -14,6 +14,7 @@ private let lockNotificationID = "com.github.Skyearn.BLEUnlock.lock"
 private let updateNotificationID = "com.github.Skyearn.BLEUnlock.update"
 private let notificationKindKey = "kind"
 private let launcherBundleIDSuffix = ".Launcher"
+private let launchAgentLabel = "local.BLEUnlock"
 private let unlockLogicMenuItemKind = "unlockLogic"
 private let lockLogicMenuItemKind = "lockLogic"
 private let unlockRSSIMenuItemKind = "unlockRSSI"
@@ -271,6 +272,100 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenuItemVa
         NSWorkspace.shared.open(url)
     }
 
+    @objc func openKeychainAccess() {
+        let candidates = [
+            "/System/Library/CoreServices/Applications/Keychain Access.app",
+            "/System/Applications/Utilities/Keychain Access.app",
+            "/Applications/Utilities/Keychain Access.app",
+        ]
+        for path in candidates where FileManager.default.fileExists(atPath: path) {
+            NSWorkspace.shared.open(URL(fileURLWithPath: path))
+            return
+        }
+    }
+
+    @objc func importBluetoothIRK() {
+        let paired = IRKResolver.pairedDevicesForImport()
+        guard !paired.isEmpty else {
+            errorModal(t("import_irk_failed"), info: t("import_irk_no_devices"))
+            return
+        }
+
+        let container = NSView(frame: NSRect(x: 0, y: 0, width: 420, height: 180))
+        let deviceLabel = NSTextField(labelWithString: t("import_irk_device"))
+        deviceLabel.frame = NSRect(x: 0, y: 148, width: 60, height: 20)
+
+        let popup = NSPopUpButton(frame: NSRect(x: 65, y: 144, width: 355, height: 26), pullsDown: false)
+        var macs: [String] = []
+        for (mac, name) in paired {
+            let displayMAC = mac.replacingOccurrences(of: "-", with: ":").uppercased()
+            popup.addItem(withTitle: "\(name) (\(displayMAC))")
+            macs.append(mac)
+        }
+        if let pixel = macs.firstIndex(where: { $0 == "08-8b-c8-49-a9-71" }) {
+            popup.selectItem(at: pixel)
+        }
+
+        let pasteLabel = NSTextField(labelWithString: t("import_irk_paste"))
+        pasteLabel.frame = NSRect(x: 0, y: 118, width: 420, height: 20)
+
+        let scroll = NSScrollView(frame: NSRect(x: 0, y: 0, width: 420, height: 110))
+        scroll.hasVerticalScroller = true
+        scroll.borderType = .bezelBorder
+        scroll.autohidesScrollers = true
+        let textView = NSTextView(frame: NSRect(x: 0, y: 0, width: 402, height: 110))
+        textView.isRichText = false
+        textView.font = NSFont.userFixedPitchFont(ofSize: NSFont.smallSystemFontSize) ?? NSFont.systemFont(ofSize: NSFont.smallSystemFontSize)
+        textView.isAutomaticQuoteSubstitutionEnabled = false
+        textView.isAutomaticDashSubstitutionEnabled = false
+        scroll.documentView = textView
+
+        container.addSubview(deviceLabel)
+        container.addSubview(popup)
+        container.addSubview(pasteLabel)
+        container.addSubview(scroll)
+
+        while true {
+            let alert = NSAlert()
+            alert.messageText = t("import_irk_title")
+            alert.informativeText = t("import_irk_info")
+            alert.window.title = "BLEUnlock"
+            alert.addButton(withTitle: t("import_irk_button"))
+            alert.addButton(withTitle: t("import_irk_open_keychain"))
+            alert.addButton(withTitle: t("cancel"))
+            alert.accessoryView = container
+
+            NSApp.activate(ignoringOtherApps: true)
+            let response = alert.runModal()
+
+            if response == .alertSecondButtonReturn {
+                openKeychainAccess()
+                continue
+            }
+            if response != .alertFirstButtonReturn {
+                return
+            }
+
+            let mac = macs[popup.indexOfSelectedItem]
+            let pasted = textView.string.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !pasted.isEmpty else {
+                errorModal(t("import_irk_failed"), info: "Paste field is empty.")
+                continue
+            }
+
+            switch IRKResolver.importIRK(forMAC: mac, pastedContent: pasted) {
+            case .success(let name, let savedMAC):
+                let displayMAC = savedMAC.replacingOccurrences(of: "-", with: ":").uppercased()
+                infoModal(t("import_irk_title"), info: String(format: t("import_irk_success"), name, displayMAC))
+                IRKResolver.refreshBindings(force: true)
+                resolveMonitoredMACsOnStartup(uuids: ble.monitoredUUIDs)
+                return
+            case .failure(let reason):
+                errorModal(t("import_irk_failed"), info: reason)
+            }
+        }
+    }
+
     func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
         if let kind = menuItem.representedObject as? String {
             if kind == unlockLogicMenuItemKind || kind == lockLogicMenuItemKind {
@@ -348,17 +443,17 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenuItemVa
     }
 
     func ensurePairHintInDeviceMenu() {
-        // Check if hint already exists at index 0
-        if deviceMenu.numberOfItems > 0, deviceMenu.item(at: 0)?.tag == 999 {
+        if deviceMenu.numberOfItems > 2,
+           deviceMenu.item(at: 0)?.tag == 999,
+           deviceMenu.item(at: 1)?.tag == 998 {
             return
         }
-        // Remove old hint if present elsewhere
         for i in stride(from: deviceMenu.numberOfItems - 1, through: 0, by: -1) {
-            if deviceMenu.item(at: i)?.tag == 999 {
+            let tag = deviceMenu.item(at: i)?.tag ?? 0
+            if tag == 999 || tag == 998 {
                 deviceMenu.removeItem(at: i)
             }
         }
-        // Insert hint at top, before everything — click to open Bluetooth settings
         let hint = NSMenuItem(title: t("pair_for_mac_hint"), action: #selector(openBluetoothSettings), keyEquivalent: "")
         hint.target = self
         hint.tag = 999
@@ -367,7 +462,16 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenuItemVa
             attributes: [.font: NSFont.menuFont(ofSize: 0)]
         )
         deviceMenu.insertItem(hint, at: 0)
-        deviceMenu.insertItem(NSMenuItem.separator(), at: 1)
+
+        let irkItem = NSMenuItem(title: t("import_bluetooth_irk"), action: #selector(importBluetoothIRK), keyEquivalent: "")
+        irkItem.target = self
+        irkItem.tag = 998
+        irkItem.attributedTitle = NSAttributedString(
+            string: t("import_bluetooth_irk"),
+            attributes: [.font: NSFont.menuFont(ofSize: 0)]
+        )
+        deviceMenu.insertItem(irkItem, at: 1)
+        deviceMenu.insertItem(NSMenuItem.separator(), at: 2)
     }
 
     /// Resolve MAC addresses for monitored devices at startup.
@@ -394,10 +498,58 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenuItemVa
                     device.macAddr = mac
                     ble.devices[uuid] = device
                 } else {
-                    macInheritLog("  device already exists in ble.devices")
+                    ble.devices[uuid]?.macAddr = mac
                 }
             } else {
                 macInheritLog("  NO-MATCH: uuid=\(uuidStr) NOT in monitored set (monitored: \(monitoredUUIDStrings.sorted().joined(separator: ", ")))")
+            }
+        }
+        // ── 2. IOBluetooth name → MAC for monitored devices with a known name ──
+        var isolatedMACs: [String: String] = [:]
+        for (mac, uuidStr) in savedMACToUUID {
+            guard let uuid = UUID(uuidString: uuidStr) else { continue }
+            if !uuids.contains(uuid) {
+                isolatedMACs[mac] = uuidStr
+            }
+        }
+        if let paired = IOBluetoothDevice.pairedDevices() {
+            var nameToMAC: [String: String] = [:]
+            for d in paired {
+                guard let dev = d as? IOBluetoothDevice,
+                      let name = dev.name,
+                      let addr = dev.addressString else { continue }
+                nameToMAC[name.lowercased()] = addr
+            }
+            for uuid in uuids where ble.devices[uuid]?.macAddr == nil {
+                let name = monitoredDeviceTitle(uuid: uuid)
+                guard name != uuid.uuidString else { continue }
+                if let mac = nameToMAC[name.lowercased()] {
+                    macInheritLog("Startup IOBluetooth: uuid=\(uuid.uuidString) name=\(name) -> mac=\(mac)")
+                    if ble.devices[uuid] == nil {
+                        let device = Device(uuid: uuid)
+                        device.macAddr = mac
+                        ble.devices[uuid] = device
+                    } else {
+                        ble.devices[uuid]?.macAddr = mac
+                    }
+                }
+            }
+        }
+        // ── 2b. IRK: map rotating RPAs in CoreBluetooth cache to stable identities ──
+        IRKResolver.refreshBindings(force: true)
+        for (uuidStr, stable) in IRKResolver.resolvedIdentitiesFromBluetoothCache() {
+            guard let uuid = UUID(uuidString: uuidStr) else { continue }
+            macInheritLog("Startup IRK: uuid=\(uuidStr) -> \(stable.name) mac=\(stable.mac)")
+            if ble.devices[uuid] == nil {
+                let device = Device(uuid: uuid)
+                device.macAddr = stable.mac
+                device.blName = stable.name
+                ble.devices[uuid] = device
+            } else if ble.devices[uuid]?.macAddr == nil {
+                ble.devices[uuid]?.macAddr = stable.mac
+                if ble.devices[uuid]?.blName == nil {
+                    ble.devices[uuid]?.blName = stable.name
+                }
             }
         }
         // ── 3. Ensure all monitored UUIDs have entries in ble.devices ──
@@ -411,11 +563,13 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenuItemVa
                 macInheritLog("LE-db: uuid=\(uuid.uuidString) -> mac=\(info.macAddr ?? "nil")")
             } else {
                 macInheritLog("LE-db: uuid=\(uuid.uuidString) -> NO MATCH in LE database, checking persistence...")
-                // Fallback: check if any persisted MAC maps to a DIFFERENT UUID — 
-                // this means the UUID rotated since last persist. Inject the MAC.
-                for (mac, savedUUID) in savedMACToUUID {
-                    if !uuids.contains(UUID(uuidString: savedUUID) ?? UUID()) {
-                        macInheritLog("  INJECT orphan MAC=\(mac) (was \(savedUUID)) into \(uuid.uuidString)")
+                // UUID rotated since last persist — reinject MAC when device name still matches.
+                let name = monitoredDeviceTitle(uuid: uuid).lowercased()
+                for (mac, oldUUIDStr) in isolatedMACs {
+                    guard let oldUUID = UUID(uuidString: oldUUIDStr) else { continue }
+                    let oldName = monitoredDeviceTitle(uuid: oldUUID).lowercased()
+                    if name == oldName, name != uuid.uuidString.lowercased() {
+                        macInheritLog("  INJECT orphan MAC=\(mac) (was \(oldUUIDStr)) into \(uuid.uuidString) by name")
                         device.macAddr = mac
                         break
                     }
@@ -737,15 +891,29 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenuItemVa
             if let mac = mac {
                 let normalized = canonicalMAC(mac)
                 macInheritLog("newDevice: uuid=\(device.uuid.uuidString) MAC=\(mac) normalized=\(normalized) checking monitored devices...")
+                var merged = false
                 for (monUUID, monDev) in ble.devices where ble.isMonitoring(uuid: monUUID) {
                     if let m = monDev.macAddr, canonicalMAC(m) == normalized {
                         macInheritLog("newDevice: MERGE \(device.uuid.uuidString) (MAC=\(mac)) into monitored \(monUUID.uuidString) (MAC=\(m))")
                         if ble.remapMonitoredUUID(from: monUUID, to: device.uuid, peripheral: device.peripheral) {
                             replaceMonitoredDevice(oldUUID: monUUID, with: device)
                         }
-                        return
+                        merged = true
+                        break
                     }
                 }
+                if !merged {
+                    for (pmac, puuid) in loadPersistedMACs() where canonicalMAC(pmac) == normalized {
+                        guard let monUUID = UUID(uuidString: puuid), ble.isMonitoring(uuid: monUUID) else { continue }
+                        macInheritLog("newDevice: MERGE via persisted MAC \(device.uuid.uuidString) -> monitored \(monUUID.uuidString)")
+                        if ble.remapMonitoredUUID(from: monUUID, to: device.uuid, peripheral: device.peripheral) {
+                            replaceMonitoredDevice(oldUUID: monUUID, with: device)
+                        }
+                        merged = true
+                        break
+                    }
+                }
+                if merged { return }
                 macInheritLog("newDevice: no monitored device matched MAC=\(normalized)")
             }
         }
@@ -2166,6 +2334,14 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenuItemVa
             attributes: [.font: NSFont.menuFont(ofSize: 0)]
         )
         deviceMenu.addItem(hint)
+        let irkItem = NSMenuItem(title: t("import_bluetooth_irk"), action: #selector(importBluetoothIRK), keyEquivalent: "")
+        irkItem.target = self
+        irkItem.tag = 998
+        irkItem.attributedTitle = NSAttributedString(
+            string: t("import_bluetooth_irk"),
+            attributes: [.font: NSFont.menuFont(ofSize: 0)]
+        )
+        deviceMenu.addItem(irkItem)
         deviceMenu.addItem(NSMenuItem.separator())
         // "Scanning…" is now managed by performDeviceMenuReorder (placed below group separator)
         let scanItem = NSMenuItem(title: t("scanning"), action: nil, keyEquivalent: "")
@@ -2325,49 +2501,150 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenuItemVa
         (Bundle.main.bundleIdentifier ?? currentAppBundleIdentifier) + launcherBundleIDSuffix
     }
 
-    func disableLegacyLoginItem() {
+    func launchAgentPlistURL() -> URL {
+        FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent("Library/LaunchAgents/\(launchAgentLabel).plist")
+    }
+
+    func launchAgentJobName() -> String {
+        "gui/\(getuid())/\(launchAgentLabel)"
+    }
+
+    @discardableResult
+    func runLaunchctl(_ arguments: [String]) -> Int32 {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/bin/launchctl")
+        process.arguments = arguments
+        let pipe = Pipe()
+        process.standardOutput = pipe
+        process.standardError = pipe
+        do {
+            try process.run()
+        } catch {
+            print("launchctl failed to start: \(error.localizedDescription)")
+            return -1
+        }
+        process.waitUntilExit()
+        if process.terminationStatus != 0 {
+            let data = pipe.fileHandleForReading.readDataToEndOfFile()
+            if let msg = String(data: data, encoding: .utf8), !msg.isEmpty {
+                print("launchctl \(arguments.joined(separator: " ")): \(msg.trimmingCharacters(in: .whitespacesAndNewlines))")
+            }
+        }
+        return process.terminationStatus
+    }
+
+    func disableLegacyLauncherLoginItems() {
+        for label in [launcherBundleIdentifier()] + legacyLauncherBundleIdentifiers() {
+            _ = runLaunchctl(["disable", "gui/\(getuid())/\(label)"])
+            _ = runLaunchctl(["bootout", "gui/\(getuid())/\(label)"])
+            if #available(macOS 13.0, *) {
+                try? SMAppService.loginItem(identifier: label).unregister()
+            }
+        }
+    }
+
+    func disableSMAppServiceLoginItems() {
         disableLegacyLoginItems()
+        disableLegacyLauncherLoginItems()
         _ = SMLoginItemSetEnabled(launcherBundleIdentifier() as CFString, false)
+        if #available(macOS 13.0, *) {
+            let service = SMAppService.loginItem(identifier: launcherBundleIdentifier())
+            try? service.unregister()
+        }
+    }
+
+    func isLaunchAgentInstalled() -> Bool {
+        FileManager.default.fileExists(atPath: launchAgentPlistURL().path)
+    }
+
+    func isLaunchAgentLoaded() -> Bool {
+        runLaunchctl(["print", launchAgentJobName()]) == 0
+    }
+
+    func launchAgentProgramArguments() -> [String] {
+        ["/usr/bin/open", "-g", "-a", Bundle.main.bundleURL.path]
+    }
+
+    func bootoutLaunchAgent() {
+        _ = runLaunchctl(["bootout", launchAgentJobName()])
+    }
+
+    @discardableResult
+    func bootstrapLaunchAgent(showErrors: Bool) -> Bool {
+        bootoutLaunchAgent()
+        let status = runLaunchctl(["bootstrap", "gui/\(getuid())", launchAgentPlistURL().path])
+        if status == 0 {
+            _ = runLaunchctl(["enable", launchAgentJobName()])
+            return true
+        }
+        if isLaunchAgentLoaded() {
+            return true
+        }
+        if showErrors {
+            errorModal("Failed to register Launch at Login",
+                       info: "launchctl bootstrap failed (status \(status)). The plist was saved and should still run at next login.")
+        }
+        return false
+    }
+
+    func installLaunchAgent(showErrors: Bool) -> Bool {
+        let plist: [String: Any] = [
+            "Label": launchAgentLabel,
+            "ProgramArguments": launchAgentProgramArguments(),
+            "RunAtLoad": true,
+            "LimitLoadToSessionType": "Aqua",
+        ]
+
+        do {
+            let dir = launchAgentPlistURL().deletingLastPathComponent()
+            try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+            let data = try PropertyListSerialization.data(fromPropertyList: plist, format: .xml, options: 0)
+            try data.write(to: launchAgentPlistURL(), options: .atomic)
+            _ = bootstrapLaunchAgent(showErrors: showErrors)
+            return true
+        } catch {
+            if showErrors {
+                errorModal("Failed to update Launch at Login", info: error.localizedDescription)
+            }
+            return false
+        }
+    }
+
+    func removeLaunchAgent() {
+        bootoutLaunchAgent()
+        try? FileManager.default.removeItem(at: launchAgentPlistURL())
+    }
+
+    func disableLegacyLoginItem() {
+        disableSMAppServiceLoginItems()
     }
 
     func isLaunchAtLoginEnabled() -> Bool {
-        // Use cached pref; smd query is slow and only needed for verification.
-        return prefs.bool(forKey: "launchAtLogin")
+        isLaunchAgentInstalled()
     }
 
     @discardableResult
     func setLaunchAtLogin(_ enabled: Bool, showErrors: Bool = true) -> Bool {
-        if #available(macOS 13.0, *) {
-            let service = SMAppService.loginItem(identifier: launcherBundleIdentifier())
-            do {
-                if enabled {
-                    try service.register()
-                } else {
-                    try service.unregister()
-                }
-                return true
-            } catch {
-                if showErrors {
-                    errorModal("Failed to update Launch at Login", info: error.localizedDescription)
-                } else {
-                    print("Launch at Login update failed: \(error.localizedDescription)")
-                }
-                return false
-            }
+        disableSMAppServiceLoginItems()
+        if enabled {
+            return installLaunchAgent(showErrors: showErrors)
         }
-
-        let ok = SMLoginItemSetEnabled(launcherBundleIdentifier() as CFString, enabled)
-        if !ok && showErrors {
-            errorModal("Failed to update Launch at Login")
-        }
-        return ok
+        removeLaunchAgent()
+        return true
     }
 
     func applicationDidFinishLaunching(_ aNotification: Notification) {
         migrateLegacyAppDataIfNeeded()
         // Offload smd XPC to serial queue; must precede constructMenu so serial order is correct.
         smdQueue.async { [weak self] in
-            self?.disableLegacyLoginItems()
+            self?.disableSMAppServiceLoginItems()
+            guard let self else { return }
+            if self.isLaunchAgentInstalled() {
+                _ = self.bootstrapLaunchAgent(showErrors: false)
+            } else if self.prefs.bool(forKey: "launchAtLogin") {
+                _ = self.setLaunchAtLogin(true, showErrors: false)
+            }
         }
 
         if let button = statusItem.button {
@@ -2375,6 +2652,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenuItemVa
             constructMenu()
         }
         ble.delegate = self
+        IRKResolver.refreshBindings(force: true)
         let monitoredUUIDs = loadMonitoredUUIDs()
         // Resolve MAC addresses for monitored devices at startup so cross-correlation works
         if !monitoredUUIDs.isEmpty {

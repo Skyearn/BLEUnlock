@@ -71,7 +71,7 @@ func appendNameResolutionLog(_ message: String) {
 var _cachedBTPlists: (timestamp: TimeInterval, plist: NSDictionary?, ledevices: [String: NSDictionary])?
 let _btPlistCacheTTL: TimeInterval = 30
 
-private func cachedBTResources() -> (plist: NSDictionary?, ledevices: [String: NSDictionary]) {
+func cachedBTResources() -> (plist: NSDictionary?, ledevices: [String: NSDictionary]) {
     let now = Date().timeIntervalSince1970
     if let cache = _cachedBTPlists, now - cache.timestamp < _btPlistCacheTTL {
         return (cache.plist, cache.ledevices)
@@ -122,6 +122,49 @@ func canonicalMAC(_ mac: String) -> String {
     return s.trimmingCharacters(in: CharacterSet(charactersIn: "-"))
 }
 
+/// Resolve MAC and stable device name using LE database, plist cache, and IRK.
+func resolveMACAndNameForPeripheral(uuid: String, advertisementName: String?, peripheralName: String?) -> (mac: String?, name: String?) {
+    var mac: String?
+    var name: String?
+
+    if let advName = advertisementName?.trimmingCharacters(in: .whitespaces), !advName.isEmpty {
+        mac = resolveMACForDeviceName(advName)
+        name = advName
+    }
+    if mac == nil, let pn = peripheralName?.trimmingCharacters(in: .whitespaces), !pn.isEmpty {
+        mac = resolveMACForDeviceName(pn)
+        name = name ?? pn
+    }
+    if mac == nil, let info = getLEDeviceInfoFromUUID(uuid) {
+        mac = info.macAddr
+        name = info.name ?? name
+    }
+    if mac == nil {
+        mac = getMACFromUUID(uuid)
+    }
+    if mac == nil, let stable = IRKResolver.stableIdentityForPeripheralUUID(uuid) {
+        mac = stable.mac
+        name = stable.name
+        macInheritLog(" resolveMACAndName: uuid=\(uuid) cache+IRK -> mac=\(stable.mac) name=\(stable.name)")
+    }
+    if let candidate = mac, let stable = IRKResolver.resolveStableIdentity(forBLEAddress: candidate) {
+        mac = stable.mac
+        name = stable.name
+        macInheritLog(" resolveMACAndName: uuid=\(uuid) IRK -> mac=\(stable.mac) name=\(stable.name)")
+    }
+    if mac == nil {
+        let tempName = name ?? peripheralName ?? advertisementName
+        if let n = tempName?.trimmingCharacters(in: .whitespaces),
+           n.hasPrefix("Android-"),
+           let sole = IRKResolver.soleBindingIfAvailable() {
+            mac = sole.mac
+            name = sole.name
+            macInheritLog(" resolveMACAndName: uuid=\(uuid) Android beacon -> \(sole.name) (\(sole.mac))")
+        }
+    }
+    return (mac, name)
+}
+
 func findKnownDeviceByMAC(newMAC: String?, knownDevices: [UUID: Device]) -> Device? {
     guard let newMAC = newMAC else { return nil }
     let normalized = canonicalMAC(newMAC)
@@ -157,6 +200,14 @@ class Device: NSObject {
     var lastNameDebugSnapshot: String?
     /// Timestamp of last MAC resolution attempt; used to throttle redundant lookups.
     var lastMACLookupTime: TimeInterval = 0
+    /// Last time this device was seen in a BLE scan (used for UUID rotation merge).
+    var lastSeenAt: TimeInterval = 0
+
+    /// True when the device has not been seen recently but is still marked visible.
+    func isStaleVisible(staleAfter seconds: TimeInterval = 8.0) -> Bool {
+        guard isVisible else { return false }
+        return Date().timeIntervalSince1970 - lastSeenAt > seconds
+    }
 
     func normalizedName(_ candidate: String?) -> String? {
         guard let candidate = candidate?.trimmingCharacters(in: .whitespaces), !candidate.isEmpty else { return nil }
@@ -166,6 +217,13 @@ class Device: NSObject {
     func looksLikeTemporaryBroadcastName(_ candidate: String) -> Bool {
         if candidate == "N/A" {
             return true
+        }
+        // Google Fast Pair beacons (Android-6144) — not the paired device name.
+        if candidate.hasPrefix("Android-") {
+            let suffix = candidate.dropFirst("Android-".count)
+            if !suffix.isEmpty && suffix.allSatisfy({ $0.isNumber }) {
+                return true
+            }
         }
         if candidate.count >= 12 && candidate.contains("/") && !candidate.contains(" ") {
             return true
@@ -248,6 +306,10 @@ class Device: NSObject {
             }
             if macAddr == nil {
                 macAddr = getMACFromUUID(uuid.description)
+            }
+            if let candidate = macAddr, let stable = IRKResolver.resolveStableIdentity(forBLEAddress: candidate) {
+                macAddr = stable.mac
+                updateNameIfNeeded(stable.name)
             }
         }
 
@@ -842,6 +904,7 @@ class BLE: NSObject, CBCentralManagerDelegate, CBPeripheralDelegate {
                         rssi RSSI: NSNumber)
     {
         let rssi = RSSI.intValue >= 0 ? -100 : RSSI.intValue
+        let now = Date().timeIntervalSince1970
         if let state = monitoredStates[peripheral.identifier], !monitoringSuspended {
             state.peripheral = peripheral
             if !state.active {
@@ -870,18 +933,14 @@ class BLE: NSObject, CBCentralManagerDelegate, CBPeripheralDelegate {
                 probe.peripheral = peripheral
                 probe.manufacture = nil  // will be populated on connect
                 probe.model = nil
-                // Resolve MAC from advertisement local name, peripheral name, or IOBluetooth
+                // Resolve MAC from advertisement, LE database, plist cache, and IRK
                 var resolvedMAC: String?
-                if let advName = advertisementData[CBAdvertisementDataLocalNameKey] as? String,
-                   let mac = resolveMACForDeviceName(advName.trimmingCharacters(in: .whitespaces)) {
-                    resolvedMAC = mac
-                }
-                if resolvedMAC == nil, let pn = peripheral.name?.trimmingCharacters(in: .whitespaces), !pn.isEmpty {
-                    resolvedMAC = resolveMACForDeviceName(pn)
-                }
-                if resolvedMAC == nil, let info = getLEDeviceInfoFromUUID(peripheral.identifier.uuidString) {
-                    resolvedMAC = info.macAddr
-                }
+                var resolvedName: String?
+                (resolvedMAC, resolvedName) = resolveMACAndNameForPeripheral(
+                    uuid: peripheral.identifier.uuidString,
+                    advertisementName: advertisementData[CBAdvertisementDataLocalNameKey] as? String,
+                    peripheralName: peripheral.name
+                )
                 if resolvedMAC == nil {
                     macInheritLog(" BLE-discover: uuid=\(peripheral.identifier.uuidString) NO MAC resolved")
                 } else {
@@ -893,7 +952,7 @@ class BLE: NSObject, CBCentralManagerDelegate, CBPeripheralDelegate {
                     // when it goes invisible so remapMonitoredUUID can succeed.
                     // Premature merge breaks future remap: old UUID gets removed from
                     // devices before remap can fire, making it permanently orphaned.
-                    if isMonitoring(uuid: matchedDevice.uuid) && matchedDevice.isVisible {
+                    if isMonitoring(uuid: matchedDevice.uuid) && matchedDevice.isVisible && !matchedDevice.isStaleVisible() {
                         macInheritLog(" Merge-deferred(skip): old-uuid=\(matchedDevice.uuid.uuidString) still visible, new-uuid=\(peripheral.identifier.uuidString)")
                         print("MAC correlation deferred (old still visible): \(matchedDevice.uuid) → \(peripheral.identifier) — skipping")
                         // Old UUID still visible, skip entirely. Don't cache new UUID
@@ -906,8 +965,9 @@ class BLE: NSObject, CBCentralManagerDelegate, CBPeripheralDelegate {
                         device.peripheral = peripheral
                         device.rssi = rssi
                         device.isVisible = true
+                        device.lastSeenAt = now
                         device.macAddr = matchedDevice.macAddr ?? resolvedMAC
-                        device.blName = matchedDevice.blName
+                        device.blName = matchedDevice.blName ?? resolvedName
                         print("MAC correlation: merged UUID \(matchedDevice.uuid) → \(peripheral.identifier)")
                         
                         // Remap monitoring if needed
@@ -930,11 +990,14 @@ class BLE: NSObject, CBCentralManagerDelegate, CBPeripheralDelegate {
                     device.peripheral = peripheral
                     device.rssi = rssi
                     device.isVisible = true
+                    device.lastSeenAt = now
                     device.advData = advertisementData[CBAdvertisementDataManufacturerDataKey] as? Data
                     device.advertisedLocalName = device.normalizedName(advertisementData[CBAdvertisementDataLocalNameKey] as? String)
                     device.updateAdvertisedNameIfNeeded(device.advertisedLocalName)
-                    
-                    // IOBluetooth MAC resolution for paired devices
+                    if let resolvedName = resolvedName {
+                        device.updateNameIfNeeded(resolvedName)
+                    }
+                    device.macAddr = resolvedMAC
                     if device.macAddr == nil, let name = device.currentResolvedName() {
                         device.macAddr = resolveMACForDeviceName(name)
                     }
@@ -945,7 +1008,7 @@ class BLE: NSObject, CBCentralManagerDelegate, CBPeripheralDelegate {
                     // Post-hoc MAC correlation: check again now that device.macAddr is set
                     if let mac = device.macAddr, let matched = findKnownDeviceByMAC(newMAC: mac, knownDevices: devices.filter { $0.key != peripheral.identifier }) {
                         // Defer if old UUID still visible and monitored (same logic as discover:merged)
-                        if isMonitoring(uuid: matched.uuid) && matched.isVisible {
+                        if isMonitoring(uuid: matched.uuid) && matched.isVisible && !matched.isStaleVisible() {
                             macInheritLog(" Late-correlation(new)-deferred: old-uuid=\(matched.uuid.uuidString) still visible")
                             print("Late correlation (new) deferred (old still visible): \(matched.uuid)")
                             // Device is already cached in devices with MAC; suppress from menu.
@@ -969,6 +1032,7 @@ class BLE: NSObject, CBCentralManagerDelegate, CBPeripheralDelegate {
                 device.peripheral = peripheral
                 device.rssi = rssi
                 device.isVisible = true
+                device.lastSeenAt = now
                 device.advData = advertisementData[CBAdvertisementDataManufacturerDataKey] as? Data ?? device.advData
                 device.advertisedLocalName = device.normalizedName(advertisementData[CBAdvertisementDataLocalNameKey] as? String) ?? device.advertisedLocalName
                 device.updateAdvertisedNameIfNeeded(device.advertisedLocalName)
@@ -982,7 +1046,7 @@ class BLE: NSObject, CBCentralManagerDelegate, CBPeripheralDelegate {
                 // UUID if it broadcasts the same MAC.
                 var didLateCorrelate = false
                 if let mac = device.macAddr, let matched = findKnownDeviceByMAC(newMAC: mac, knownDevices: devices.filter { $0.key != peripheral.identifier }) {
-                    if !isMonitoring(uuid: matched.uuid) || !matched.isVisible {
+                    if !isMonitoring(uuid: matched.uuid) || !matched.isVisible || matched.isStaleVisible() {
                         // Old UUID is either unmonitored or invisible → safe to merge + remap
                         macInheritLog(" Late-correlation(update): merging \(peripheral.identifier) -> \(matched.uuid)")
                         print("Late correlation (update): merging \(peripheral.identifier) into \(matched.uuid)")

@@ -5,8 +5,10 @@
 	<key>destination</key>
 	<string>export</string>
 	<key>method</key>
-	<string>mac-application</string>
+	<string>developer-id</string>
 	<key>signingStyle</key>
-	<string>automatic</string>
+	<string>manual</string>
+	<key>teamID</key>
+	<string>C6VNMT964L</string>
 </dict>
 </plist>

@@ -5,3 +5,4 @@
 #include "lowlevel.h"
 #include "MediaRemote.h"
 #include "AppleEventsAccess.h"
+#include <CommonCrypto/CommonCrypto.h>

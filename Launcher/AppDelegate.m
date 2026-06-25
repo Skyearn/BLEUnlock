@@ -10,13 +10,18 @@
     NSString *mainId = [id stringByReplacingOccurrencesOfString:@".Launcher" withString:@""];
     if ([NSRunningApplication runningApplicationsWithBundleIdentifier:mainId].count > 0) {
         [NSApp terminate:self];
+        return;
     }
 
+    // Launcher.app -> LoginItems -> Library -> Contents -> BLEUnlock.app
     NSURL *launcherBundleURL = [[NSBundle mainBundle] bundleURL];
-    NSURL *mainBundleURL = [[[launcherBundleURL URLByDeletingLastPathComponent]
+    NSURL *mainBundleURL = [[[[launcherBundleURL URLByDeletingLastPathComponent]
+                              URLByDeletingLastPathComponent]
                              URLByDeletingLastPathComponent]
                             URLByDeletingLastPathComponent];
-    if (mainBundleURL == nil || ![[NSFileManager defaultManager] fileExistsAtPath:mainBundleURL.path]) {
+    if (mainBundleURL == nil ||
+        ![[mainBundleURL pathExtension] isEqualToString:@"app"] ||
+        ![[NSFileManager defaultManager] fileExistsAtPath:mainBundleURL.path]) {
         NSLog(@"Failed to locate main app bundle from launcher path: %@", launcherBundleURL.path);
         [NSApp terminate:self];
         return;

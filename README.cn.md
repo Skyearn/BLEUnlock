@@ -63,7 +63,7 @@ brew install --cask Skyearn/tap/bleunlock
 >
 > 首次双击打开时，macOS 会弹出「无法验证是否包含恶意软件」的提示，只有「完成」和「移到废纸篓」两个按钮。请按下面的流程处理：
 > 1. 先将 `BLEUnlock.app` 移动到 `/Applications`。
-> 2. **不要双击**，按住 Control 点击应用，选择 **打开**，此时弹窗会多出「打开」按钮，点击即可。
+> 2. 打开终端，执行以下命令清除隔离标记：`sudo xattr -rd com.apple.quarantine /Applications/BLEUnlock.app`
 > 3. 如果仍被拦截，打开 **系统设置** -> **隐私与安全性**，滚动到页面底部，对 BLEUnlock 点击 **仍要打开**。
 > 4. 再次启动应用，并在弹窗中确认 **打开**。
 > 5. 应用启动后，再按提示授予蓝牙、辅助功能、钥匙串和通知等权限。

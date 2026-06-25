@@ -63,7 +63,7 @@ Download the dmg file from [Releases](https://github.com/Skyearn/BLEUnlock/relea
 >
 > When double-clicking for the first time, macOS shows "cannot be opened because Apple cannot check it for malicious software" with only "Done" and "Move to Trash":
 > 1. Move `BLEUnlock.app` to `/Applications`.
-> 2. **Do not double-click** — Control-click the app and select **Open**, then click **Open** in the dialog.
+> 2. Open Terminal and run: `sudo xattr -rd com.apple.quarantine /Applications/BLEUnlock.app` to clear the quarantine flag.
 > 3. If it is still blocked, open **System Settings** -> **Privacy & Security**, scroll down, and click **Open Anyway** for BLEUnlock.
 > 4. Launch the app again and confirm **Open**.
 > 5. After the app starts, grant the requested Bluetooth, Accessibility, Keychain, and Notification permissions.

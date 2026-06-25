@@ -65,6 +65,7 @@
 "wake_without_unlocking" = "Wake without Unlocking";
 "pair_for_mac_hint" = "Pair to stabilize random address tracking →";
 "import_bluetooth_irk" = "Import Bluetooth IRK…";
+"sort_scan_by_signal" = "Sort Scan List by Signal";
 "import_irk_title" = "Import Bluetooth IRK";
 "import_irk_info" = "1. Open Keychain Access → System keychain\n2. Search \"BluetoothLE\"\n3. Open the entry whose Account is \"Public\" followed by your device MAC\n4. Check Show password, authenticate once, and copy the XML\n5. Paste below and click Import\n\nBLEUnlock stores the IRK locally — it will not read the System keychain again.";
 "import_irk_device" = "Device:";

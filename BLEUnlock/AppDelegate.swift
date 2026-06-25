@@ -28,6 +28,52 @@ private enum AppNotificationKind: String {
     case update
 }
 
+/// Accessory view for the IRK import alert. NSAlert does not reliably route ⌘V to an
+/// embedded NSTextView, so we forward standard edit shortcuts and claim first responder.
+private final class IRKImportAccessoryView: NSView {
+    let textView: NSTextView
+    private let scrollView: NSScrollView
+
+    init(frame frameRect: NSRect, textView: NSTextView, scrollView: NSScrollView) {
+        self.textView = textView
+        self.scrollView = scrollView
+        super.init(frame: frameRect)
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) {
+        fatalError("init(coder:) has not been implemented")
+    }
+
+    override var acceptsFirstResponder: Bool { true }
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        window?.makeFirstResponder(textView)
+    }
+
+    override func performKeyEquivalent(with event: NSEvent) -> Bool {
+        guard event.modifierFlags.contains(.command),
+              let command = event.charactersIgnoringModifiers?.lowercased() else {
+            return super.performKeyEquivalent(with: event)
+        }
+
+        let action: Selector?
+        switch command {
+        case "v": action = #selector(NSText.paste(_:))
+        case "c": action = #selector(NSText.copy(_:))
+        case "x": action = #selector(NSText.cut(_:))
+        case "a": action = #selector(NSText.selectAll(_:))
+        default: action = nil
+        }
+
+        if let action, NSApp.sendAction(action, to: textView, from: self) {
+            return true
+        }
+        return super.performKeyEquivalent(with: event)
+    }
+}
+
 enum ManagedMediaApp: String, CaseIterable, Hashable {
     case music
     case quickTimePlayer
@@ -272,6 +318,13 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenuItemVa
         NSWorkspace.shared.open(url)
     }
 
+    @objc func toggleSortScanBySignal(_ sender: NSMenuItem) {
+        let enabled = sender.state != .on
+        prefs.set(enabled, forKey: "sortDevicesByRSSI")
+        sender.state = enabled ? .on : .off
+        scheduleDeviceMenuReorder()
+    }
+
     @objc func openKeychainAccess() {
         let candidates = [
             "/System/Library/CoreServices/Applications/Keychain Access.app",
@@ -314,16 +367,20 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenuItemVa
         scroll.borderType = .bezelBorder
         scroll.autohidesScrollers = true
         let textView = NSTextView(frame: NSRect(x: 0, y: 0, width: 402, height: 110))
+        textView.isEditable = true
+        textView.isSelectable = true
         textView.isRichText = false
         textView.font = NSFont.userFixedPitchFont(ofSize: NSFont.smallSystemFontSize) ?? NSFont.systemFont(ofSize: NSFont.smallSystemFontSize)
         textView.isAutomaticQuoteSubstitutionEnabled = false
         textView.isAutomaticDashSubstitutionEnabled = false
+        textView.allowsUndo = true
         scroll.documentView = textView
 
-        container.addSubview(deviceLabel)
-        container.addSubview(popup)
-        container.addSubview(pasteLabel)
-        container.addSubview(scroll)
+        let accessory = IRKImportAccessoryView(frame: container.bounds, textView: textView, scrollView: scroll)
+        accessory.addSubview(deviceLabel)
+        accessory.addSubview(popup)
+        accessory.addSubview(pasteLabel)
+        accessory.addSubview(scroll)
 
         while true {
             let alert = NSAlert()
@@ -333,9 +390,12 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenuItemVa
             alert.addButton(withTitle: t("import_irk_button"))
             alert.addButton(withTitle: t("import_irk_open_keychain"))
             alert.addButton(withTitle: t("cancel"))
-            alert.accessoryView = container
+            alert.accessoryView = accessory
+            alert.layout()
+            alert.window.initialFirstResponder = textView
 
             NSApp.activate(ignoringOtherApps: true)
+            alert.window.makeFirstResponder(textView)
             let response = alert.runModal()
 
             if response == .alertSecondButtonReturn {
@@ -443,14 +503,16 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenuItemVa
     }
 
     func ensurePairHintInDeviceMenu() {
-        if deviceMenu.numberOfItems > 2,
+        if deviceMenu.numberOfItems > 3,
            deviceMenu.item(at: 0)?.tag == 999,
-           deviceMenu.item(at: 1)?.tag == 998 {
+           deviceMenu.item(at: 1)?.tag == 998,
+           deviceMenu.item(at: 2)?.tag == 997 {
+            deviceMenu.item(at: 2)?.state = prefs.bool(forKey: "sortDevicesByRSSI") ? .on : .off
             return
         }
         for i in stride(from: deviceMenu.numberOfItems - 1, through: 0, by: -1) {
             let tag = deviceMenu.item(at: i)?.tag ?? 0
-            if tag == 999 || tag == 998 {
+            if tag == 999 || tag == 998 || tag == 997 {
                 deviceMenu.removeItem(at: i)
             }
         }
@@ -471,7 +533,14 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenuItemVa
             attributes: [.font: NSFont.menuFont(ofSize: 0)]
         )
         deviceMenu.insertItem(irkItem, at: 1)
-        deviceMenu.insertItem(NSMenuItem.separator(), at: 2)
+
+        let sortItem = NSMenuItem(title: t("sort_scan_by_signal"), action: #selector(toggleSortScanBySignal), keyEquivalent: "")
+        sortItem.target = self
+        sortItem.tag = 997
+        sortItem.state = prefs.bool(forKey: "sortDevicesByRSSI") ? .on : .off
+        deviceMenu.insertItem(sortItem, at: 2)
+
+        deviceMenu.insertItem(NSMenuItem.separator(), at: 3)
     }
 
     /// Resolve MAC addresses for monitored devices at startup.
@@ -661,7 +730,10 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenuItemVa
                 return keyA.localizedStandardCompare(keyB) == .orderedAscending
             }
         let unmonitoredAfter = snapshot.filter { !monitoredSet.contains($0.0) }
-        let wantsSeparator = !monitoredFirst.isEmpty && !unmonitoredAfter.isEmpty
+        let sortedUnmonitored = prefs.bool(forKey: "sortDevicesByRSSI")
+            ? sortScanListBySignal(unmonitoredAfter)
+            : unmonitoredAfter
+        let wantsSeparator = !monitoredFirst.isEmpty && !sortedUnmonitored.isEmpty
 
         // Build desired items list (flat)
         var desired: [NSMenuItem] = []
@@ -674,12 +746,12 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenuItemVa
             scanningMenuItem = si
         }
         desired.append(scanningMenuItem!)
-        for (_, item) in unmonitoredAfter { desired.append(item) }
+        for (_, item) in sortedUnmonitored { desired.append(item) }
 
-        // Full rebuild: remove all items from index 2 (hint=0, fixed-sep=1)
+        // Full rebuild: remove all items from index 4 (hint=0, irk=1, sort=2, fixed-sep=3)
         // and re-add in desired order. Safe because performDeviceMenuReorder
         // only runs when the menu is not being tracked.
-        let devStart = 2
+        let devStart = 4
         while deviceMenu.numberOfItems > devStart {
             deviceMenu.removeItem(at: devStart)
         }
@@ -689,7 +761,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenuItemVa
 
         // Sync visibility
         groupSeparatorItem?.isHidden = !wantsSeparator
-        scanningMenuItem?.isHidden = unmonitoredAfter.isEmpty
+        scanningMenuItem?.isHidden = sortedUnmonitored.isEmpty
     }
 
     /// Toggle the persistent group separator and scanning item visibility.
@@ -770,6 +842,18 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenuItemVa
             return device.rssi
         }
         return nil
+    }
+
+    /// Sort scan-list devices strongest signal first; no-signal entries sink to the bottom.
+    func sortScanListBySignal(_ items: [(UUID, NSMenuItem)]) -> [(UUID, NSMenuItem)] {
+        items.sorted { a, b in
+            let rssiA = displayedRSSI(for: a.0) ?? Int.min
+            let rssiB = displayedRSSI(for: b.0) ?? Int.min
+            if rssiA != rssiB { return rssiA > rssiB }
+            let idxA = deviceInsertionOrder.firstIndex(of: a.0) ?? Int.max
+            let idxB = deviceInsertionOrder.firstIndex(of: b.0) ?? Int.max
+            return idxA < idxB
+        }
     }
 
     func configuredDeviceCheckbox(uuid: UUID, title: String) -> NSButton {
@@ -2342,6 +2426,11 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenuItemVa
             attributes: [.font: NSFont.menuFont(ofSize: 0)]
         )
         deviceMenu.addItem(irkItem)
+        let sortItem = NSMenuItem(title: t("sort_scan_by_signal"), action: #selector(toggleSortScanBySignal), keyEquivalent: "")
+        sortItem.target = self
+        sortItem.tag = 997
+        sortItem.state = prefs.bool(forKey: "sortDevicesByRSSI") ? .on : .off
+        deviceMenu.addItem(sortItem)
         deviceMenu.addItem(NSMenuItem.separator())
         // "Scanning…" is now managed by performDeviceMenuReorder (placed below group separator)
         let scanItem = NSMenuItem(title: t("scanning"), action: nil, keyEquivalent: "")

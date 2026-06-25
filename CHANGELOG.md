@@ -1,5 +1,10 @@
 # Release Notes
 
+## 1.14.4
+
+- **Feat:** Optional **Sort Scan List by Signal** toggle — strongest RSSI at top of the unmonitored scan list (off by default).
+- **Fix:** ⌘V paste works in the IRK import dialog (NSAlert accessory view keyboard routing).
+
 ## 1.14.3
 
 - **Feat:** Android / Pixel support via manual Bluetooth IRK import — resolves rotating `Android-XXXX` BLE addresses to a stable MAC for monitoring.

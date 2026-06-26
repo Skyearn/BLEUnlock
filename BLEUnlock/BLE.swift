@@ -737,14 +737,14 @@ class BLE: NSObject, CBCentralManagerDelegate, CBPeripheralDelegate {
         }
     }
     
-    /// Median-of-3 filter: maintains a sliding window of the 3 most recent raw RSSI
+    /// Median-of-5 filter: maintains a sliding window of the 3 most recent raw RSSI
     /// values and outputs the median. Single outliers (±20 dBm spikes) are completely
-    /// eliminated, while real trends track within 1 sample (2 seconds).
+    /// eliminated, while real trends track within 2 samples.
     func getEstimatedRSSI(state: MonitoredDeviceState, rssi: Int) -> Int {
         // Ignore invalid readings that would corrupt the median window
         guard rssi < 0 else { return state.lastRSSI ?? rssi }
         state.rssiWindow.append(rssi)
-        if state.rssiWindow.count > 3 {
+        if state.rssiWindow.count > 5 {
             state.rssiWindow.removeFirst()
         }
         let sorted = state.rssiWindow.sorted()

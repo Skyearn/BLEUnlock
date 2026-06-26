@@ -658,8 +658,8 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenuItemVa
 
     func updateDeviceCheckbox(_ checkbox: NSButton, uuid: UUID, title: String) {
         checkbox.identifier = NSUserInterfaceItemIdentifier(uuid.uuidString)
-        checkbox.title = title
         checkbox.attributedTitle = attributedTitleForDevice(uuid: uuid, title: title)
+        checkbox.display()
         checkbox.state = ble.isMonitoring(uuid: uuid) ? .on : .off
         let fittingSize = checkbox.fittingSize
         if let container = checkbox.superview {
@@ -753,8 +753,8 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenuItemVa
                         macInheritLog("newDevice: MERGE \(device.uuid.uuidString) (MAC=\(mac)) into monitored \(monUUID.uuidString) (MAC=\(m))")
                         if ble.remapMonitoredUUID(from: monUUID, to: device.uuid, peripheral: device.peripheral) {
                             replaceMonitoredDevice(oldUUID: monUUID, with: device)
-                            return
                         }
+                        return
                     }
                 }
                 macInheritLog("newDevice: no monitored device matched MAC=\(normalized)")
@@ -1986,6 +1986,13 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenuItemVa
         menuItem.state = value ? .on : .off
     }
     
+    @objc func togglePassiveMode(_ menuItem: NSMenuItem) {
+        let passiveMode = !prefs.bool(forKey: "passiveMode")
+        prefs.set(passiveMode, forKey: "passiveMode")
+        menuItem.state = passiveMode ? .on : .off
+        ble.setPassiveMode(passiveMode)
+    }
+
     @objc func toggleWakeWithoutUnlocking(_ menuItem: NSMenuItem) {
         let wakeWithoutUnlocking = !prefs.bool(forKey: "wakeWithoutUnlocking")
         prefs.set(wakeWithoutUnlocking, forKey: "wakeWithoutUnlocking")
@@ -2246,6 +2253,8 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenuItemVa
         
         mainMenu.addItem(withTitle: t("set_password"), action: #selector(askPassword), keyEquivalent: "")
 
+        item = mainMenu.addItem(withTitle: t("passive_mode"), action: #selector(togglePassiveMode), keyEquivalent: "")
+        item.state = prefs.bool(forKey: "passiveMode") ? .on : .off
         
         item = mainMenu.addItem(withTitle: t("launch_at_login"), action: #selector(toggleLaunchAtLogin), keyEquivalent: "")
         // Defer smd XPC to serial queue to avoid blocking main thread / concurrent smd calls.
@@ -2411,6 +2420,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenuItemVa
         if timeout != 0 {
             ble.signalTimeout = Double(timeout)
         }
+        ble.setPassiveMode(prefs.bool(forKey: "passiveMode"))
         let thresholdRSSI = prefs.integer(forKey: "thresholdRSSI")
         if thresholdRSSI != 0 {
             ble.thresholdRSSI = thresholdRSSI

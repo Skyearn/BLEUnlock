@@ -138,7 +138,7 @@ If it asks for permission to access its own password in Keychain, you must choos
 ### "Signal is lost" occurs frequently
 
 Increase *No-Signal Timeout*.
-BLEUnlock now briefly connects to obtain the MAC address and disconnects immediately — RSSI is read from advertisements uniformly, eliminating the need for a separate Passive Mode.
+Or try *Passive Mode*.
 
 ### My Bluetooth keyboard, mouse, Personal Hotspot, or whatever Bluetooth, went nuts!
 
@@ -153,7 +153,7 @@ sudo pkill bluetoothd
 
 This command will ask your login password.
 
-If the problem persists, try increasing *No-Signal Timeout*.
+If the problem persists, turn on *Passive Mode*.
 
 ## Notes on MAC address
 

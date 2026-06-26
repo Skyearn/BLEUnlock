@@ -634,12 +634,16 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenuItemVa
         let attrs: [NSAttributedString.Key: Any] = [.font: NSFont.menuFont(ofSize: 0)]
         return (title as NSString).size(withAttributes: attrs).width
     }
+    func attributedTitleForDevice(uuid: UUID, title: String) -> NSAttributedString {
+        let resolved = ble.devices[uuid]?.macAddr != nil
+        let color = resolved ? NSColor.controlTextColor : NSColor.secondaryLabelColor
+        return NSAttributedString(string: title, attributes: [.foregroundColor: color])
+    }
+
 
     func configureDeviceMenuView(_ menuItem: NSMenuItem, uuid: UUID, title: String) -> NSButton {
         let checkbox = configuredDeviceCheckbox(uuid: uuid, title: title)
-        let resolved = ble.devices[uuid]?.macAddr != nil
-        let color = resolved ? NSColor.controlTextColor : NSColor.secondaryLabelColor
-        checkbox.attributedTitle = NSAttributedString(string: title, attributes: [.foregroundColor: color])
+        checkbox.attributedTitle = attributedTitleForDevice(uuid: uuid, title: title)
         let fittingSize = checkbox.fittingSize
         let height = max(24, fittingSize.height + 4)
         let currentWidth = max(300, fittingSize.width + 28)
@@ -654,9 +658,8 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenuItemVa
 
     func updateDeviceCheckbox(_ checkbox: NSButton, uuid: UUID, title: String) {
         checkbox.identifier = NSUserInterfaceItemIdentifier(uuid.uuidString)
-        let resolved = ble.devices[uuid]?.macAddr != nil
-        let color = resolved ? NSColor.controlTextColor : NSColor.secondaryLabelColor
-        checkbox.attributedTitle = NSAttributedString(string: title, attributes: [.foregroundColor: color])
+        checkbox.attributedTitle = attributedTitleForDevice(uuid: uuid, title: title)
+        checkbox.display()
         checkbox.state = ble.isMonitoring(uuid: uuid) ? .on : .off
         let fittingSize = checkbox.fittingSize
         if let container = checkbox.superview {

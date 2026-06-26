@@ -844,11 +844,9 @@ class BLE: NSObject, CBCentralManagerDelegate, CBPeripheralDelegate {
         let rssi = RSSI.intValue >= 0 ? -100 : RSSI.intValue
         if let state = monitoredStates[peripheral.identifier], !monitoringSuspended {
             state.peripheral = peripheral
-            if !state.active {
-                updateMonitoredState(state, rssi: rssi)
-                if !passiveMode {
-                    connectMonitoredPeripheral(state)
-                }
+            updateMonitoredState(state, rssi: rssi)
+            if !state.active && !passiveMode {
+                connectMonitoredPeripheral(state)
             }
         }
 

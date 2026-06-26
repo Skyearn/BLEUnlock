@@ -214,7 +214,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenuItemVa
             deviceMenuIsOpen = true
             // Option-key toggle: check initial state before starting scan
             let initialOption = NSEvent.modifierFlags.contains(.option)
-            setDeviceMenuShowDetails(initialOption, forceRefresh: true)
+            setDeviceMenuShowDetails(initialOption)
             flagsEventMonitor = NSEvent.addLocalMonitorForEvents(matching: .flagsChanged) { [weak self] event in
                 guard let self = self, self.deviceMenuIsOpen else { return event }
                 let newState = event.modifierFlags.contains(.option)

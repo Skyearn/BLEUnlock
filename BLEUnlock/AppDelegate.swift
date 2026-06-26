@@ -262,7 +262,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenuItemVa
             .font: NSFont.menuFont(ofSize: 0)
         ])
         let optRange = (title as NSString).range(of: "⌥")
-        attr.addAttribute(.foregroundColor, value: NSColor.secondaryLabelColor, range: optRange)
+        attr.addAttribute(.foregroundColor, value: NSColor.tertiaryLabelColor, range: optRange)
         return attr
     }
 
@@ -636,7 +636,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenuItemVa
     }
     func attributedTitleForDevice(uuid: UUID, title: String) -> NSAttributedString {
         let resolved = ble.devices[uuid]?.macAddr != nil
-        let color = resolved ? NSColor.controlTextColor : NSColor.secondaryLabelColor
+        let color = resolved ? NSColor.controlTextColor : NSColor.disabledControlTextColor
         return NSAttributedString(string: title, attributes: [.foregroundColor: color])
     }
 

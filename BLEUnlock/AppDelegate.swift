@@ -622,11 +622,12 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenuItemVa
     }
 
     func configuredDeviceCheckbox(uuid: UUID, title: String) -> NSButton {
-        let checkbox = NSButton(checkboxWithTitle: title, target: self, action: #selector(toggleDeviceCheckbox(_:)))
+        let checkbox = NSButton(checkboxWithTitle: "", target: self, action: #selector(toggleDeviceCheckbox(_:)))
         checkbox.identifier = NSUserInterfaceItemIdentifier(uuid.uuidString)
         checkbox.state = ble.isMonitoring(uuid: uuid) ? .on : .off
         checkbox.font = NSFont.menuFont(ofSize: 0)
         checkbox.alignment = .left
+        checkbox.attributedTitle = attributedTitleForDevice(uuid: uuid, title: title)
         if #available(macOS 10.14, *) {
             checkbox.contentTintColor = .controlAccentColor
         }
@@ -639,7 +640,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenuItemVa
     }
     func attributedTitleForDevice(uuid: UUID, title: String) -> NSAttributedString {
         let resolved = ble.devices[uuid]?.macAddr != nil
-        let color = resolved ? NSColor.controlTextColor : NSColor.controlTextColor.withAlphaComponent(0.5)
+        let color = resolved ? NSColor.controlTextColor : NSColor.disabledControlTextColor
         return NSAttributedString(string: title, attributes: [
             .foregroundColor: color,
             .font: NSFont.menuFont(ofSize: 0)
@@ -649,8 +650,6 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenuItemVa
 
     func configureDeviceMenuView(_ menuItem: NSMenuItem, uuid: UUID, title: String) -> NSButton {
         let checkbox = configuredDeviceCheckbox(uuid: uuid, title: title)
-        checkbox.attributedTitle = attributedTitleForDevice(uuid: uuid, title: title)
-        checkbox.display()
         let fittingSize = checkbox.fittingSize
         let height = max(24, fittingSize.height + 4)
         let currentWidth = max(300, fittingSize.width + 28)

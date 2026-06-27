@@ -15,7 +15,7 @@ permissions:
 
 jobs:
   build-and-release:
-    runs-on: macos-latest
+    runs-on: macos-26-arm64
     env:
       RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.tag || github.ref_name }}
 

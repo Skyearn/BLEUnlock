@@ -3,8 +3,10 @@
 
 ## 1.14.3
 
+- **Fix:** macOS 13+ now uses SMAppService.mainApp to register the main app as a login item — replaces the legacy Launcher helper. The app shows as running in background in System Settings.
+- **Fix:** All legacy login item registrations are cleaned up on startup, and state is read from the system instead of cached.
 - **Fix:** RSSI median filter increased from 3 to 5 samples — signal display is even smoother with single outliers fully suppressed.
-- **Fix:** Launch-at-login no longer hangs the app on enable.
+- **Fix:** Launch-at-login operations moved to async queue — avoids blocking the main thread from SMAppService XPC calls.
 - **Fix:** Device list expansion no longer freezes in edge cases (e.g. rapid open).
 - **Fix:** Duplicate device entries properly cleaned when UUIDs rotate, preventing stale entries from accumulation.
 - **Fix:** Device submenu no longer reopens unexpectedly after closing the parent menu.

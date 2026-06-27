@@ -1955,12 +1955,15 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenuItemVa
     }
 
     @objc func toggleLaunchAtLogin(_ menuItem: NSMenuItem) {
-        let launchAtLogin = !isLaunchAtLoginEnabled()
-        menuItem.state = launchAtLogin ? .on : .off
-        prefs.set(launchAtLogin, forKey: "launchAtLogin")
-        // SMAppService.register() / unregister() are XPC calls; offload to avoid blocking UI.
+        let targetEnabled = !isLaunchAtLoginEnabled()
+        // SMAppService XPC — offload. Update pref on success;
+        // menu item will reflect new state on next menu open.
         smdQueue.async { [weak self] in
-            _ = self?.setLaunchAtLogin(launchAtLogin)
+            guard let self = self else { return }
+            let ok = self.setLaunchAtLogin(targetEnabled)
+            if ok {
+                self.prefs.set(targetEnabled, forKey: "launchAtLogin")
+            }
         }
     }
 
@@ -2342,19 +2345,41 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenuItemVa
     }
 
     func isLaunchAtLoginEnabled() -> Bool {
-        // Use cached pref; smd query is slow and only needed for verification.
         return prefs.bool(forKey: "launchAtLogin")
+    }
+
+    // Clean up ALL legacy login items: old SMLoginItemSetEnabled entries
+    // (both current and jp.sone bundle IDs) and old SMAppService.loginItem
+    // registrations that used the Launcher helper instead of mainApp.
+    func cleanupAllLegacyLoginItems() {
+        let allLauncherIDs = legacyLauncherBundleIdentifiers() + [launcherBundleIdentifier()]
+        for bid in allLauncherIDs {
+            _ = SMLoginItemSetEnabled(bid as CFString, false)
+        }
+        if #available(macOS 13.0, *) {
+            for bid in allLauncherIDs {
+                let helperService = SMAppService.loginItem(identifier: bid)
+                try? helperService.unregister()
+            }
+        }
     }
 
     @discardableResult
     func setLaunchAtLogin(_ enabled: Bool, showErrors: Bool = true) -> Bool {
         if #available(macOS 13.0, *) {
-            let service = SMAppService.loginItem(identifier: launcherBundleIdentifier())
+            // Clean up legacy helper registrations when enabling
+            if enabled {
+                cleanupAllLegacyLoginItems()
+            }
+            // Use mainApp — registers the main app itself, no Launcher helper needed.
+            let service = SMAppService.mainApp
             do {
                 if enabled {
                     try service.register()
                 } else {
                     try service.unregister()
+                    // Clean up any leftover legacy registrations on disable too
+                    cleanupAllLegacyLoginItems()
                 }
                 return true
             } catch {
@@ -2376,9 +2401,17 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenuItemVa
 
     func applicationDidFinishLaunching(_ aNotification: Notification) {
         migrateLegacyAppDataIfNeeded()
-        // Offload smd XPC to serial queue; must precede constructMenu so serial order is correct.
+        // Clean up all legacy login items and sync pref with actual registration state.
         smdQueue.async { [weak self] in
-            self?.disableLegacyLoginItems()
+            guard let self = self else { return }
+            self.cleanupAllLegacyLoginItems()
+            if #available(macOS 13.0, *) {
+                let status = SMAppService.mainApp.status
+                let registered = (status == .enabled || status == .requiresApproval)
+                if registered != self.prefs.bool(forKey: "launchAtLogin") {
+                    self.prefs.set(registered, forKey: "launchAtLogin")
+                }
+            }
         }
 
         if let button = statusItem.button {

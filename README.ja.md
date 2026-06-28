@@ -205,7 +205,7 @@ sudo pkill bluetoothd
 BLEUnlockはロック・アンロック時に以下のスクリプトを実行します。
 
 ```
-~/Library/Application Scripts/jp.sone.BLEUnlock/event
+~/Library/Application Scripts/com.github.Skyearn.BLEUnlock/event
 ```
 
 スクリプトにはイベントに応じて以下の引数の一つが渡されます。

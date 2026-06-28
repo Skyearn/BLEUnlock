@@ -178,7 +178,7 @@ sudo pkill bluetoothd
 当锁定或解锁发生时，BLEUnlock 会执行以下位置的脚本：
 
 ```sh
-~/Library/Application Scripts/jp.sone.BLEUnlock/event
+~/Library/Application Scripts/com.github.Skyearn.BLEUnlock/event
 ```
 
 根据事件类型，会传入以下参数之一：

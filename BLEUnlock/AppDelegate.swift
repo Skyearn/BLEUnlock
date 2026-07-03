@@ -766,6 +766,17 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenuItemVa
                 }
                 macInheritLog("newDevice: no monitored device matched MAC=\(normalized)")
             }
+            // Suppress unmonitored device if its name matches a monitored device
+            // that already has a confirmed MAC address, skip adding — likely a
+            // UUID rotation awaiting correlation.
+            if mac == nil, let name = device.currentResolvedName() {
+                for (monUUID, monDev) in ble.devices where ble.isMonitoring(uuid: monUUID) && monDev.macAddr != nil {
+                    if monDev.currentResolvedName() == name {
+                        macInheritLog("newDevice: suppressing name-match duplicate \(device.uuid.uuidString) (\(name)) for monitored \(monUUID.uuidString)")
+                        return
+                    }
+                }
+            }
         }
         let menuItem = addDeviceMenuItem(title: "", uuid: device.uuid)
         let checkbox = configureDeviceMenuView(menuItem, uuid: device.uuid, title: menuItemTitle(device: device, showDetails: deviceMenuShowDetails))
@@ -783,6 +794,35 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenuItemVa
     
     func updateDevice(device: Device) {
         macInheritLog("updateDevice: uuid=\(device.uuid.uuidString) mac=\(device.macAddr ?? "nil") isMonitored=\(ble.isMonitoring(uuid: device.uuid))")
+        // MAC-based merge: unmonitored device that just resolved MAC matching a monitored one
+        if !ble.isMonitoring(uuid: device.uuid), let mac = device.macAddr {
+            let normalized = canonicalMAC(mac)
+            for (monUUID, monDev) in ble.devices where ble.isMonitoring(uuid: monUUID) {
+                if let m = monDev.macAddr, canonicalMAC(m) == normalized {
+                    macInheritLog("updateDevice: MERGE \(device.uuid.uuidString) (MAC=\(mac)) into monitored \(monUUID.uuidString)")
+                    if ble.remapMonitoredUUID(from: monUUID, to: device.uuid, peripheral: device.peripheral) {
+                        replaceMonitoredDevice(oldUUID: monUUID, with: device)
+                    }
+                    return
+                }
+            }
+        }
+        // Suppress unmonitored device if its name matches a monitored device
+        // that already has a confirmed MAC address (awaiting MAC correlation).
+        if !ble.isMonitoring(uuid: device.uuid), let name = device.currentResolvedName() {
+            for (monUUID, monDev) in ble.devices where ble.isMonitoring(uuid: monUUID) && monDev.macAddr != nil {
+                if monDev.currentResolvedName() == name {
+                    macInheritLog("updateDevice: suppressing name-match duplicate \(device.uuid.uuidString) (\(name)) for monitored \(monUUID.uuidString)")
+                    // Remove if already in list
+                    if let menuItem = deviceDict.removeValue(forKey: device.uuid) {
+                        menuItem.menu?.removeItem(menuItem)
+                    }
+                    deviceCheckboxDict.removeValue(forKey: device.uuid)
+                    deviceInsertionOrder.removeAll { $0 == device.uuid }
+                    return
+                }
+            }
+        }
         if let checkbox = deviceCheckboxDict[device.uuid] {
             updateDeviceCheckbox(checkbox, uuid: device.uuid, title: menuItemTitle(device: device, showDetails: deviceMenuShowDetails))
         } else {
@@ -965,6 +1005,29 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenuItemVa
                     staleUUIDs.append(uuid)
                 } else if let checkbox = deviceCheckboxDict[uuid] {
                     updateDeviceCheckbox(checkbox, uuid: uuid, title: menuItemTitle(device: device, showDetails: deviceMenuShowDetails))
+                }
+                // Dedup: stale unmonitored if MAC/name matches a monitored device
+                if !monitoring, let device = ble.devices[uuid] {
+                    let hasMonitoredMAC: Bool = {
+                        if let mac = device.macAddr {
+                            let n = canonicalMAC(mac)
+                            for (mUUID, mDev) in ble.devices where ble.isMonitoring(uuid: mUUID) {
+                                if let m = mDev.macAddr, canonicalMAC(m) == n { return true }
+                            }
+                        }
+                        return false
+                    }()
+                    let hasMonitoredName: Bool = {
+                        if let name = device.currentResolvedName() {
+                            for (mUUID, mDev) in ble.devices where ble.isMonitoring(uuid: mUUID) && mDev.macAddr != nil {
+                                if mDev.currentResolvedName() == name { return true }
+                            }
+                        }
+                        return false
+                    }()
+                    if hasMonitoredMAC || hasMonitoredName {
+                        staleUUIDs.append(uuid)
+                    }
                 }
             } else if let checkbox = deviceCheckboxDict[uuid] {
                 if monitoring {

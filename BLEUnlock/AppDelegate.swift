@@ -161,7 +161,12 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenuItemVa
     var automaticUpdateChecksMenuItem: NSMenuItem?
     var deviceDict: [UUID: NSMenuItem] = [:]
     var deviceInsertionOrder: [UUID] = []
-    var deviceCheckboxDict: [UUID: NSButton] = [:]
+struct DeviceMenuItemView {
+    let checkbox: NSButton
+    let label: NSTextField
+}
+
+    var deviceCheckboxDict: [UUID: DeviceMenuItemView] = [:]
     var monitorDetailItems: [UUID: NSMenuItem] = [:]
     var monitorMenuItem : NSMenuItem?
     var lockNowMenuItem: NSMenuItem?
@@ -621,15 +626,12 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenuItemVa
         return nil
     }
 
-    func configuredDeviceCheckbox(uuid: UUID, title: String) -> NSButton {
-        let checkbox = NSButton(checkboxWithTitle: title, target: self, action: #selector(toggleDeviceCheckbox(_:)))
+    func configuredDeviceCheckbox(uuid: UUID) -> NSButton {
+        let checkbox = NSButton(checkboxWithTitle: "", target: self, action: #selector(toggleDeviceCheckbox(_:)))
         checkbox.identifier = NSUserInterfaceItemIdentifier(uuid.uuidString)
         checkbox.state = ble.isMonitoring(uuid: uuid) ? .on : .off
         checkbox.font = NSFont.menuFont(ofSize: 0)
         checkbox.alignment = .left
-        if #available(macOS 10.14, *) {
-            checkbox.contentTintColor = .controlAccentColor
-        }
         return checkbox
     }
 
@@ -637,42 +639,50 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenuItemVa
         let attrs: [NSAttributedString.Key: Any] = [.font: NSFont.menuFont(ofSize: 0)]
         return (title as NSString).size(withAttributes: attrs).width
     }
-    func attributedTitleForDevice(uuid: UUID, title: String) -> NSAttributedString {
+    func labelColorForDevice(uuid: UUID) -> NSColor {
         let resolved = ble.devices[uuid]?.macAddr != nil
-        let color = resolved ? NSColor.controlTextColor : NSColor.disabledControlTextColor
-        return NSAttributedString(string: title, attributes: [
-            .foregroundColor: color,
-            .font: NSFont.menuFont(ofSize: 0)
-        ])
+        return resolved ? NSColor.controlTextColor : NSColor.disabledControlTextColor
     }
 
 
-    func configureDeviceMenuView(_ menuItem: NSMenuItem, uuid: UUID, title: String) -> NSButton {
-        let checkbox = configuredDeviceCheckbox(uuid: uuid, title: title)
-        checkbox.attributedTitle = attributedTitleForDevice(uuid: uuid, title: title)
-        checkbox.display()
-        let fittingSize = checkbox.fittingSize
-        let height = max(24, fittingSize.height + 4)
-        let currentWidth = max(300, fittingSize.width + 28)
-        // Use cached max width if available to keep menu width stable
+    func configuredDeviceLabel(title: String, uuid: UUID) -> NSTextField {
+        let label = NSTextField(labelWithString: title)
+        label.font = NSFont.menuFont(ofSize: 0)
+        label.textColor = labelColorForDevice(uuid: uuid)
+        label.identifier = NSUserInterfaceItemIdentifier("label-" + uuid.uuidString)
+        return label
+    }
+
+    func configureDeviceMenuView(_ menuItem: NSMenuItem, uuid: UUID, title: String) -> DeviceMenuItemView {
+        let checkbox = configuredDeviceCheckbox(uuid: uuid)
+        let label = configuredDeviceLabel(title: title, uuid: uuid)
+        let checkboxFit = checkbox.fittingSize
+        let labelFit = label.fittingSize
+        let totalWidth = checkboxFit.width + labelFit.width + 8
+        let height = max(24, max(checkboxFit.height, labelFit.height) + 4)
+        let currentWidth = max(300, totalWidth + 28)
         let width = deviceMaxTitleWidth[uuid] ?? currentWidth
         let container = NSView(frame: NSRect(x: 0, y: 0, width: width, height: height))
-        checkbox.frame = NSRect(x: 14, y: (height - fittingSize.height) / 2, width: fittingSize.width, height: fittingSize.height)
+        checkbox.frame = NSRect(x: 14, y: (height - checkboxFit.height) / 2, width: checkboxFit.width, height: checkboxFit.height)
+        label.frame = NSRect(x: 14 + checkboxFit.width + 4, y: (height - labelFit.height) / 2, width: labelFit.width, height: labelFit.height)
         container.addSubview(checkbox)
+        container.addSubview(label)
         menuItem.view = container
-        return checkbox
+        return DeviceMenuItemView(checkbox: checkbox, label: label)
     }
 
-    func updateDeviceCheckbox(_ checkbox: NSButton, uuid: UUID, title: String) {
-        checkbox.identifier = NSUserInterfaceItemIdentifier(uuid.uuidString)
-        checkbox.attributedTitle = attributedTitleForDevice(uuid: uuid, title: title)
-        checkbox.display()
-        checkbox.state = ble.isMonitoring(uuid: uuid) ? .on : .off
-        let fittingSize = checkbox.fittingSize
-        if let container = checkbox.superview {
-            let height = max(24, fittingSize.height + 4)
-            let currentWidth = max(300, fittingSize.width + 28)
-            // Use cached max width if available; always update cache
+    func updateDeviceCheckbox(_ view: DeviceMenuItemView, uuid: UUID, title: String) {
+        view.checkbox.identifier = NSUserInterfaceItemIdentifier(uuid.uuidString)
+        view.checkbox.state = ble.isMonitoring(uuid: uuid) ? .on : .off
+        view.label.stringValue = title
+        view.label.textColor = labelColorForDevice(uuid: uuid)
+        view.label.sizeToFit()
+        let checkboxFit = view.checkbox.fittingSize
+        let labelFit = view.label.fittingSize
+        let totalWidth = checkboxFit.width + labelFit.width + 8
+        if let container = view.checkbox.superview {
+            let height = max(24, max(checkboxFit.height, labelFit.height) + 4)
+            let currentWidth = max(300, totalWidth + 28)
             if let cached = deviceMaxTitleWidth[uuid] {
                 deviceMaxTitleWidth[uuid] = max(cached, currentWidth)
             } else {
@@ -680,7 +690,8 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenuItemVa
             }
             let width = deviceMaxTitleWidth[uuid]!
             container.frame.size = NSSize(width: width, height: height)
-            checkbox.frame = NSRect(x: 14, y: (height - fittingSize.height) / 2, width: fittingSize.width, height: fittingSize.height)
+            view.checkbox.frame = NSRect(x: 14, y: (height - checkboxFit.height) / 2, width: checkboxFit.width, height: checkboxFit.height)
+            view.label.frame = NSRect(x: 14 + checkboxFit.width + 4, y: (height - labelFit.height) / 2, width: labelFit.width, height: labelFit.height)
         }
     }
 
@@ -690,11 +701,11 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenuItemVa
         }
         for uuid in orderedUUIDs where deviceDict[uuid] == nil {
             let menuItem = addDeviceMenuItem(title: "", uuid: uuid)
-            let checkbox = configureDeviceMenuView(menuItem,
+            let view = configureDeviceMenuView(menuItem,
                                                    uuid: uuid,
                                                    title: menuItemTitleNotDetected(title: monitoredDeviceTitle(uuid: uuid)))
             deviceDict[uuid] = menuItem
-            deviceCheckboxDict[uuid] = checkbox
+            deviceCheckboxDict[uuid] = view
             if !deviceInsertionOrder.contains(uuid) {
                 deviceInsertionOrder.append(uuid)
             }

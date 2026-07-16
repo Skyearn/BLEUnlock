@@ -910,7 +910,16 @@ class BLE: NSObject, CBCentralManagerDelegate, CBPeripheralDelegate {
                     }
                     
                     devices[peripheral.identifier] = device
-                    central.connect(peripheral, options: nil)
+                    // Only GATT-connect if name matches a monitored device (avoid resource contention with BT audio etc.)
+                    let newName = device.currentResolvedName()
+                    if let name = newName, !name.isEmpty {
+                        for (uuid, _) in devices where isMonitoring(uuid: uuid) {
+                            if devices[uuid]?.currentResolvedName() == name {
+                                central.connect(peripheral, options: nil)
+                                break
+                            }
+                        }
+                    }
                     
                     // Post-hoc MAC correlation: check again now that device.macAddr is set
                     if let mac = device.macAddr, let matched = findKnownDeviceByMAC(newMAC: mac, knownDevices: devices.filter { $0.key != peripheral.identifier }) {

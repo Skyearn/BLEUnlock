@@ -407,6 +407,9 @@ class BLE: NSObject, CBCentralManagerDelegate, CBPeripheralDelegate {
         }
     }
     var monitoredStates: [UUID: MonitoredDeviceState] = [:]
+    /// UUIDs that have been GATT-connected for device-info discovery (not monitored RSSI).
+    /// Once connected, the same UUID won't reconnect. Stale entries (device gone >5 min) are cleaned on check.
+    var gattConnectedForInfo: [UUID: Date] = [:]
 
     /// Remap monitored UUID when a physical device's UUID rotates (e.g. privacy rotation).
     /// Transfers monitoredState to the new peripheral and persists the updated set.
@@ -752,6 +755,25 @@ class BLE: NSObject, CBCentralManagerDelegate, CBPeripheralDelegate {
         monitoredStates[peripheral.identifier]
     }
 
+    /// Clean entries from gattConnectedForInfo whose device hasn't been visible for >5 min.
+    func cleanupGATTConnectedForInfo() {
+        let cutoff = Date().addingTimeInterval(-300)
+        gattConnectedForInfo = gattConnectedForInfo.filter { uuid, connectedAt in
+            if connectedAt > cutoff { return true }
+            guard let dev = devices[uuid] else { return false }
+            return dev.isVisible
+        }
+    }
+
+    /// Returns true if this UUID hasn't been GATT-connected for info yet.
+    /// Inserts into tracking set on first call.
+    func shouldGATTConnectForInfo(uuid: UUID) -> Bool {
+        cleanupGATTConnectedForInfo()
+        guard gattConnectedForInfo[uuid] == nil else { return false }
+        gattConnectedForInfo[uuid] = Date()
+        return true
+    }
+
     func connectMonitoredPeripheral(_ state: MonitoredDeviceState) {
         guard let p = state.peripheral else { return }
         guard !monitoringSuspended else { return }
@@ -891,7 +913,9 @@ class BLE: NSObject, CBCentralManagerDelegate, CBPeripheralDelegate {
                             }
                         }
                         
-                        central.connect(peripheral, options: nil)
+                        if shouldGATTConnectForInfo(uuid: peripheral.identifier) {
+                            central.connect(peripheral, options: nil)
+                        }
                         device.logNameResolutionIfNeeded(context: "discover:merged")
                     }
                 }
@@ -910,7 +934,9 @@ class BLE: NSObject, CBCentralManagerDelegate, CBPeripheralDelegate {
                     }
                     
                     devices[peripheral.identifier] = device
-                    central.connect(peripheral, options: nil)
+                    if shouldGATTConnectForInfo(uuid: peripheral.identifier) {
+                        central.connect(peripheral, options: nil)
+                    }
                     
                     // Post-hoc MAC correlation: check again now that device.macAddr is set
                     if let mac = device.macAddr, let matched = findKnownDeviceByMAC(newMAC: mac, knownDevices: devices.filter { $0.key != peripheral.identifier }) {

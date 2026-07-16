@@ -2037,13 +2037,17 @@ struct DeviceMenuItemView {
 
     @objc func toggleLaunchAtLogin(_ menuItem: NSMenuItem) {
         let targetEnabled = !isLaunchAtLoginEnabled()
-        // SMAppService XPC — offload. Update pref on success;
-        // menu item will reflect new state on next menu open.
-        smdQueue.async { [weak self] in
+        menuItem.state = targetEnabled ? .on : .off
+        // SMAppService XPC — offload to serial queue. Revert on failure.
+        smdQueue.async { [weak self, weak menuItem] in
             guard let self = self else { return }
             let ok = self.setLaunchAtLogin(targetEnabled)
             if ok {
                 self.prefs.set(targetEnabled, forKey: "launchAtLogin")
+            } else {
+                DispatchQueue.main.async {
+                    menuItem?.state = targetEnabled ? .off : .on
+                }
             }
         }
     }

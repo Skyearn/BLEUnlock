@@ -641,7 +641,16 @@ struct DeviceMenuItemView {
     }
     func labelColorForDevice(uuid: UUID) -> NSColor {
         let resolved = ble.devices[uuid]?.macAddr != nil
-        return resolved ? NSColor.controlTextColor : NSColor.disabledControlTextColor
+        guard !resolved else { return NSColor.controlTextColor }
+        // disabledControlTextColor renders near-invisible in dark mode on macOS < 26
+        let osVer = ProcessInfo.processInfo.operatingSystemVersion
+        if osVer.majorVersion >= 26 {
+            return NSColor.disabledControlTextColor
+        }
+        if #available(macOS 10.14, *) {
+            return NSColor.secondaryLabelColor
+        }
+        return NSColor.disabledControlTextColor
     }
 
 

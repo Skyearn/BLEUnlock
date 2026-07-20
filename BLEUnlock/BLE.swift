@@ -765,7 +765,8 @@ class BLE: NSObject, CBCentralManagerDelegate, CBPeripheralDelegate {
 
         guard p.state == .disconnected else { return }
         print("Connecting \(state.uuid)")
-        centralMgr.connect(p, options: nil)
+        // FIXME: GATT connection disabled for testing
+        // centralMgr.connect(p, options: nil)
         state.connectionTimer?.invalidate()
         state.connectionTimer = Timer.scheduledTimer(withTimeInterval: 60, repeats: false, block: { [weak self, weak state, weak p] _ in
             guard let self = self, let state = state, let p = p else { return }
@@ -892,7 +893,8 @@ class BLE: NSObject, CBCentralManagerDelegate, CBPeripheralDelegate {
                         }
                         
                         if device.manufacture == nil && device.model == nil {
-                            central.connect(peripheral, options: nil)
+                            // FIXME: GATT connection disabled for testing
+                            // central.connect(peripheral, options: nil)
                         }
                         device.logNameResolutionIfNeeded(context: "discover:merged")
                     }
@@ -913,7 +915,8 @@ class BLE: NSObject, CBCentralManagerDelegate, CBPeripheralDelegate {
                     
                     devices[peripheral.identifier] = device
                     if device.manufacture == nil && device.model == nil {
-                        central.connect(peripheral, options: nil)
+                        // FIXME: GATT connection disabled for testing
+                        // central.connect(peripheral, options: nil)
                     }
                     
                     // Post-hoc MAC correlation: check again now that device.macAddr is set

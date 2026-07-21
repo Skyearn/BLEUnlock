@@ -407,6 +407,10 @@ class BLE: NSObject, CBCentralManagerDelegate, CBPeripheralDelegate {
         }
     }
     var monitoredStates: [UUID: MonitoredDeviceState] = [:]
+    /// Gate: only one GATT info-connect at a time, to avoid BT resource contention.
+    var gattInfoConnectInProgress = false
+    /// Queue of peripherals waiting for GATT info-connect.
+    var gattInfoConnectQueue: [CBPeripheral] = []
 
     /// Remap monitored UUID when a physical device's UUID rotates (e.g. privacy rotation).
     /// Transfers monitoredState to the new peripheral and persists the updated set.
@@ -583,8 +587,8 @@ class BLE: NSObject, CBCentralManagerDelegate, CBPeripheralDelegate {
 
             if let device = devices[uuid] {
                 state.peripheral = device.peripheral ?? state.peripheral
-                state.lastRSSI = device.rssi
-                state.rssiWindow = [device.rssi]
+                                state.lastRSSI = device.rssi < 0 ? device.rssi : nil
+                                state.rssiWindow = device.rssi < 0 ? [device.rssi] : []
             } else {
                 state.lastRSSI = nil
             }
@@ -751,6 +755,43 @@ class BLE: NSObject, CBCentralManagerDelegate, CBPeripheralDelegate {
     func monitoredState(for peripheral: CBPeripheral) -> MonitoredDeviceState? {
         monitoredStates[peripheral.identifier]
     }
+    /// Check if GATT connection for device-info is warranted — only connect if
+    /// name or MAC matches a monitored device, to avoid BT audio interference.
+    func shouldGATTConnectForInfo(_ device: Device) -> Bool {
+        guard device.manufacture == nil, device.model == nil else { return false }
+        if let name = device.currentResolvedName(), !name.isEmpty {
+            return devices.contains { isMonitoring(uuid: $0.key) && $0.value.currentResolvedName() == name }
+        }
+        if let mac = device.macAddr {
+            return devices.contains { isMonitoring(uuid: $0.key) && $0.value.macAddr == mac }
+        }
+        // Allow GATT if a monitored UUID is no longer visible (possible rotation)
+        if monitoredUUIDs.contains(where: { devices[$0] == nil || devices[$0]?.isVisible == false }) {
+            return true
+        }
+        return false
+    }
+
+    /// Throttled GATT connect for device-info: one at a time, rest enqueued.
+    func tryGATTConnectForInfo(_ peripheral: CBPeripheral) {
+        if gattInfoConnectInProgress {
+            if !gattInfoConnectQueue.contains(where: { $0.identifier == peripheral.identifier }) {
+                gattInfoConnectQueue.append(peripheral)
+            }
+            return
+        }
+        gattInfoConnectInProgress = true
+        centralMgr.connect(peripheral, options: nil)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 5) { [weak self] in
+            guard let self = self else { return }
+            self.gattInfoConnectInProgress = false
+            if let next = self.gattInfoConnectQueue.first {
+                self.gattInfoConnectQueue.removeFirst()
+                self.tryGATTConnectForInfo(next)
+            }
+        }
+    }
+
 
     func connectMonitoredPeripheral(_ state: MonitoredDeviceState) {
         guard let p = state.peripheral else { return }
@@ -765,8 +806,7 @@ class BLE: NSObject, CBCentralManagerDelegate, CBPeripheralDelegate {
 
         guard p.state == .disconnected else { return }
         print("Connecting \(state.uuid)")
-        // FIXME: GATT connection disabled for testing
-        // centralMgr.connect(p, options: nil)
+        centralMgr.connect(p, options: nil)
         state.connectionTimer?.invalidate()
         state.connectionTimer = Timer.scheduledTimer(withTimeInterval: 60, repeats: false, block: { [weak self, weak state, weak p] _ in
             guard let self = self, let state = state, let p = p else { return }
@@ -893,8 +933,7 @@ class BLE: NSObject, CBCentralManagerDelegate, CBPeripheralDelegate {
                         }
                         
                         if device.manufacture == nil && device.model == nil {
-                            // FIXME: GATT connection disabled for testing
-                            // central.connect(peripheral, options: nil)
+                            tryGATTConnectForInfo(peripheral)
                         }
                         device.logNameResolutionIfNeeded(context: "discover:merged")
                     }
@@ -914,9 +953,8 @@ class BLE: NSObject, CBCentralManagerDelegate, CBPeripheralDelegate {
                     }
                     
                     devices[peripheral.identifier] = device
-                    if device.manufacture == nil && device.model == nil {
-                        // FIXME: GATT connection disabled for testing
-                        // central.connect(peripheral, options: nil)
+                    if shouldGATTConnectForInfo(device) {
+                        tryGATTConnectForInfo(peripheral)
                     }
                     
                     // Post-hoc MAC correlation: check again now that device.macAddr is set

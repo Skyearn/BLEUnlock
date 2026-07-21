@@ -617,11 +617,11 @@ struct DeviceMenuItemView {
     }
 
     func displayedRSSI(for uuid: UUID) -> Int? {
-        if let monitoredRSSI = ble.monitoredStates[uuid]?.lastRSSI {
+        if let monitoredRSSI = ble.monitoredStates[uuid]?.lastRSSI, monitoredRSSI < 0 {
             return monitoredRSSI
         }
         if let device = ble.devices[uuid], device.isVisible {
-            return device.rssi
+            return device.rssi < 0 ? device.rssi : nil
         }
         return nil
     }

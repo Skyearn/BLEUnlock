@@ -1019,6 +1019,10 @@ class BLE: NSObject, CBCentralManagerDelegate, CBPeripheralDelegate {
                 }
             }
             if let device = device {
+                if shouldGATTConnectForInfo(device) {
+                    tryGATTConnectForInfo(peripheral)
+                }
+
                 resetScanTimer(device: device)
             }
         }

@@ -407,10 +407,23 @@ class BLE: NSObject, CBCentralManagerDelegate, CBPeripheralDelegate {
         }
     }
     var monitoredStates: [UUID: MonitoredDeviceState] = [:]
-    /// Gate: only one GATT info-connect at a time, to avoid BT resource contention.
+
+    // MARK: GATT info-connect throttle
+    // Only one GATT device-info connection at a time to avoid BT resource
+    // contention. The gate is released by real connection lifecycle events
+    // (didConnect/didFailToConnect/didDisconnect) with a watchdog backstop.
+    struct GATTInfoRecord {
+        var backoffUntil: TimeInterval = 0
+        var resolved = false
+    }
+    var gattInfoState: [UUID: GATTInfoRecord] = [:]
     var gattInfoConnectInProgress = false
-    /// Queue of peripherals waiting for GATT info-connect.
-    var gattInfoConnectQueue: [CBPeripheral] = []
+    var currentGATTInfoPeripheralUUID: UUID?
+    var gattInfoConnectQueue: [UUID] = []
+    var gattInfoWatchdogTimer: Timer?
+    var gattInfoReadsPending = 0
+    let gattInfoConnectTimeout: TimeInterval = 12
+    let gattInfoConnectQueueMax = 10
 
     /// Remap monitored UUID when a physical device's UUID rotates (e.g. privacy rotation).
     /// Transfers monitoredState to the new peripheral and persists the updated set.
@@ -494,6 +507,7 @@ class BLE: NSObject, CBCentralManagerDelegate, CBPeripheralDelegate {
         // are still detected during background/locked-screen operation.
         if !monitoredUUIDs.isEmpty { return }
         scanMode = false
+        resetGATTInfoConnectState()
         if monitoredStates.values.contains(where: { $0.active }) {
             centralMgr.stopScan()
         }
@@ -518,6 +532,7 @@ class BLE: NSObject, CBCentralManagerDelegate, CBPeripheralDelegate {
     func suspendMonitoringForSystemSleep() {
         guard !monitoringSuspended else { return }
         monitoringSuspended = true
+        resetGATTInfoConnectState()
         centralMgr.stopScan()
 
         for state in monitoredStates.values {
@@ -756,40 +771,126 @@ class BLE: NSObject, CBCentralManagerDelegate, CBPeripheralDelegate {
         monitoredStates[peripheral.identifier]
     }
     /// Check if GATT connection for device-info is warranted — only connect if
-    /// name or MAC matches a monitored device, to avoid BT audio interference.
+    /// the device is monitored itself or its name/MAC matches a monitored
+    /// device (rotation evidence), to avoid BT audio interference.
     func shouldGATTConnectForInfo(_ device: Device) -> Bool {
         guard device.manufacture == nil, device.model == nil else { return false }
+        if let record = gattInfoState[device.uuid] {
+            if record.resolved { return false }
+            if record.backoffUntil > Date().timeIntervalSince1970 { return false }
+        }
+        return gattInfoScopeMatch(device)
+    }
+
+    /// Scope filter: monitored itself, or name/MAC matches a monitored device.
+    private func gattInfoScopeMatch(_ device: Device) -> Bool {
+        if isMonitoring(uuid: device.uuid) { return true }
         if let name = device.currentResolvedName(), !name.isEmpty {
             return devices.contains { isMonitoring(uuid: $0.key) && $0.value.currentResolvedName() == name }
         }
         if let mac = device.macAddr {
             return devices.contains { isMonitoring(uuid: $0.key) && $0.value.macAddr == mac }
         }
-        // Allow GATT if a monitored UUID is no longer visible (possible rotation)
-        if monitoredUUIDs.contains(where: { devices[$0] == nil || devices[$0]?.isVisible == false }) {
-            return true
-        }
         return false
     }
 
     /// Throttled GATT connect for device-info: one at a time, rest enqueued.
+    /// The gate is released by lifecycle events; a watchdog bounds each attempt.
     func tryGATTConnectForInfo(_ peripheral: CBPeripheral) {
-        if gattInfoConnectInProgress {
-            if !gattInfoConnectQueue.contains(where: { $0.identifier == peripheral.identifier }) {
-                gattInfoConnectQueue.append(peripheral)
-            }
+        guard let device = devices[peripheral.identifier] else { return }
+        guard shouldGATTConnectForInfo(device) else { return }
+        // Already connected/connecting: info discovery piggybacks on that
+        // connection (didConnect -> discoverServices), no extra connect needed.
+        guard peripheral.state == .disconnected else { return }
+        guard currentGATTInfoPeripheralUUID != peripheral.identifier,
+              !gattInfoConnectQueue.contains(peripheral.identifier) else { return }
+        guard gattInfoConnectQueue.count < gattInfoConnectQueueMax else { return }
+        gattInfoConnectQueue.append(peripheral.identifier)
+        if !gattInfoConnectInProgress {
+            popNextGATTInfoConnect()
+        }
+    }
+
+    private func startGATTInfoConnect(_ peripheral: CBPeripheral) {
+        guard !monitoringSuspended, centralMgr.state == .poweredOn else {
+            gattInfoConnectQueue.removeAll { $0 == peripheral.identifier }
             return
         }
         gattInfoConnectInProgress = true
-        centralMgr.connect(peripheral, options: nil)
-        DispatchQueue.main.asyncAfter(deadline: .now() + 5) { [weak self] in
-            guard let self = self else { return }
-            self.gattInfoConnectInProgress = false
-            if let next = self.gattInfoConnectQueue.first {
-                self.gattInfoConnectQueue.removeFirst()
-                self.tryGATTConnectForInfo(next)
-            }
+        currentGATTInfoPeripheralUUID = peripheral.identifier
+        gattInfoReadsPending = 0
+        if gattInfoState[peripheral.identifier] == nil {
+            gattInfoState[peripheral.identifier] = GATTInfoRecord()
         }
+        centralMgr.connect(peripheral, options: nil)
+
+        gattInfoWatchdogTimer?.invalidate()
+        gattInfoWatchdogTimer = Timer.scheduledTimer(withTimeInterval: gattInfoConnectTimeout, repeats: false, block: { [weak self] _ in
+            guard let self = self else { return }
+            guard self.gattInfoConnectInProgress,
+                  self.currentGATTInfoPeripheralUUID == peripheral.identifier else { return }
+            self.centralMgr.cancelPeripheralConnection(peripheral)
+            self.finishGATTInfoConnect(peripheral, outcome: .timeout)
+        })
+        if let timer = gattInfoWatchdogTimer {
+            RunLoop.main.add(timer, forMode: .common)
+        }
+    }
+
+    private func popNextGATTInfoConnect() {
+        guard !gattInfoConnectInProgress else { return }
+        while !gattInfoConnectQueue.isEmpty {
+            let uuid = gattInfoConnectQueue.removeFirst()
+            guard let device = devices[uuid], device.isVisible,
+                  let peripheral = device.peripheral, peripheral.state == .disconnected else {
+                continue  // stale/connected entry - skip
+            }
+            startGATTInfoConnect(peripheral)
+            return
+        }
+    }
+
+    private enum GATTInfoOutcome {
+        case success, noService, readError, failed, disconnected, timeout
+    }
+
+    private func finishGATTInfoConnect(_ peripheral: CBPeripheral, outcome: GATTInfoOutcome) {
+        guard gattInfoConnectInProgress, currentGATTInfoPeripheralUUID == peripheral.identifier else { return }
+        gattInfoWatchdogTimer?.invalidate()
+        gattInfoWatchdogTimer = nil
+        gattInfoReadsPending = 0
+
+        let now = Date().timeIntervalSince1970
+        var record = gattInfoState[peripheral.identifier] ?? GATTInfoRecord()
+        switch outcome {
+        case .success:
+            record.resolved = true
+        case .noService:
+            record.backoffUntil = now + 900
+        case .readError:
+            record.backoffUntil = now + 300
+        case .failed, .disconnected, .timeout:
+            record.backoffUntil = now + 60
+        }
+        gattInfoState[peripheral.identifier] = record
+
+        gattInfoConnectInProgress = false
+        currentGATTInfoPeripheralUUID = nil
+        popNextGATTInfoConnect()
+    }
+
+    /// Clear queue/gate on shutdown paths (system sleep, scan teardown).
+    func resetGATTInfoConnectState() {
+        gattInfoConnectQueue.removeAll()
+        gattInfoWatchdogTimer?.invalidate()
+        gattInfoWatchdogTimer = nil
+        gattInfoReadsPending = 0
+        if gattInfoConnectInProgress, let uuid = currentGATTInfoPeripheralUUID,
+           let peripheral = devices[uuid]?.peripheral {
+            centralMgr.cancelPeripheralConnection(peripheral)
+        }
+        gattInfoConnectInProgress = false
+        currentGATTInfoPeripheralUUID = nil
     }
 
 
@@ -831,6 +932,7 @@ class BLE: NSObject, CBCentralManagerDelegate, CBPeripheralDelegate {
             }
             if !self.isMonitoring(uuid: device.uuid) {
                 self.devices.removeValue(forKey: device.uuid)
+                self.gattInfoState.removeValue(forKey: device.uuid)
             }
         })
         if let timer = device.scanTimer {
@@ -932,9 +1034,7 @@ class BLE: NSObject, CBCentralManagerDelegate, CBPeripheralDelegate {
                             }
                         }
                         
-                        if device.manufacture == nil && device.model == nil {
-                            tryGATTConnectForInfo(peripheral)
-                        }
+                        tryGATTConnectForInfo(peripheral)
                         device.logNameResolutionIfNeeded(context: "discover:merged")
                     }
                 }
@@ -953,9 +1053,7 @@ class BLE: NSObject, CBCentralManagerDelegate, CBPeripheralDelegate {
                     }
                     
                     devices[peripheral.identifier] = device
-                    if shouldGATTConnectForInfo(device) {
-                        tryGATTConnectForInfo(peripheral)
-                    }
+                    tryGATTConnectForInfo(peripheral)
                     
                     // Post-hoc MAC correlation: check again now that device.macAddr is set
                     if let mac = device.macAddr, let matched = findKnownDeviceByMAC(newMAC: mac, knownDevices: devices.filter { $0.key != peripheral.identifier }) {
@@ -1019,10 +1117,7 @@ class BLE: NSObject, CBCentralManagerDelegate, CBPeripheralDelegate {
                 }
             }
             if let device = device {
-                if shouldGATTConnectForInfo(device) {
-                    tryGATTConnectForInfo(peripheral)
-                }
-
+                tryGATTConnectForInfo(peripheral)
                 resetScanTimer(device: device)
             }
         }
@@ -1045,6 +1140,22 @@ class BLE: NSObject, CBCentralManagerDelegate, CBPeripheralDelegate {
             state.connectionTimer = nil
             peripheral.readRSSI()
         }
+    }
+
+    func centralManager(_ central: CBCentralManager,
+                        didFailToConnect peripheral: CBPeripheral,
+                        error: Error?)
+    {
+        guard gattInfoConnectInProgress, currentGATTInfoPeripheralUUID == peripheral.identifier else { return }
+        finishGATTInfoConnect(peripheral, outcome: .failed)
+    }
+
+    func centralManager(_ central: CBCentralManager,
+                        didDisconnectPeripheral peripheral: CBPeripheral,
+                        error: Error?)
+    {
+        guard gattInfoConnectInProgress, currentGATTInfoPeripheralUUID == peripheral.identifier else { return }
+        finishGATTInfoConnect(peripheral, outcome: .disconnected)
     }
 
     //MARK:CBCentralManagerDelegate end -
@@ -1085,12 +1196,23 @@ class BLE: NSObject, CBCentralManagerDelegate, CBPeripheralDelegate {
 
     func peripheral(_ peripheral: CBPeripheral,
                     didDiscoverServices error: Error?) {
-        if let services = peripheral.services {
-            for service in services {
-                if service.uuid == DeviceInformation {
-                    peripheral.discoverCharacteristics([ManufacturerName, ModelName], for: service)
-                }
+        let isCurrentInfoConnect = gattInfoConnectInProgress && currentGATTInfoPeripheralUUID == peripheral.identifier
+        if let error = error {
+            if isCurrentInfoConnect {
+                centralMgr.cancelPeripheralConnection(peripheral)
+                finishGATTInfoConnect(peripheral, outcome: .readError)
             }
+            return
+        }
+        guard let services = peripheral.services else { return }
+        var foundDeviceInformation = false
+        for service in services where service.uuid == DeviceInformation {
+            foundDeviceInformation = true
+            peripheral.discoverCharacteristics([ManufacturerName, ModelName], for: service)
+        }
+        if !foundDeviceInformation, isCurrentInfoConnect {
+            centralMgr.cancelPeripheralConnection(peripheral)
+            finishGATTInfoConnect(peripheral, outcome: .noService)
         }
     }
 
@@ -1098,11 +1220,28 @@ class BLE: NSObject, CBCentralManagerDelegate, CBPeripheralDelegate {
                     didDiscoverCharacteristicsFor service: CBService,
                     error: Error?)
     {
-        if let chars = service.characteristics {
-            for chara in chars {
-                if chara.uuid == ManufacturerName || chara.uuid == ModelName {
-                    peripheral.readValue(for:chara)
-                }
+        let isCurrentInfoConnect = gattInfoConnectInProgress && currentGATTInfoPeripheralUUID == peripheral.identifier
+        if let error = error {
+            if isCurrentInfoConnect {
+                centralMgr.cancelPeripheralConnection(peripheral)
+                finishGATTInfoConnect(peripheral, outcome: .readError)
+            }
+            return
+        }
+        guard let chars = service.characteristics else { return }
+        var infoChars = 0
+        for chara in chars {
+            if chara.uuid == ManufacturerName || chara.uuid == ModelName {
+                infoChars += 1
+                peripheral.readValue(for: chara)
+            }
+        }
+        if isCurrentInfoConnect {
+            if infoChars == 0 {
+                centralMgr.cancelPeripheralConnection(peripheral)
+                finishGATTInfoConnect(peripheral, outcome: .noService)
+            } else {
+                gattInfoReadsPending = infoChars
             }
         }
     }
@@ -1111,25 +1250,35 @@ class BLE: NSObject, CBCentralManagerDelegate, CBPeripheralDelegate {
                     didUpdateValueFor characteristic: CBCharacteristic,
                     error: Error?)
     {
-        if let value = characteristic.value {
-            let str: String? = String(data: value, encoding: .utf8)
-            if let s = str {
-                if let device = devices[peripheral.identifier] {
-                    if characteristic.uuid == ManufacturerName {
-                        device.manufacture = s
-                        device.logNameResolutionIfNeeded(context: "characteristic:manufacturer")
-                        DispatchQueue.main.async { [weak self] in self?.delegate?.updateDevice(device: device) }
-                    }
-                    if characteristic.uuid == ModelName {
-                        device.model = s
-                        device.logNameResolutionIfNeeded(context: "characteristic:model")
-                        DispatchQueue.main.async { [weak self] in self?.delegate?.updateDevice(device: device) }
-                    }
-                    if device.manufacture != nil && device.model != nil && !isMonitoring(uuid: device.uuid) {
-                        centralMgr.cancelPeripheralConnection(peripheral)
-                    }
+        let isInfoChar = characteristic.uuid == ManufacturerName || characteristic.uuid == ModelName
+        if isInfoChar, let value = characteristic.value, let s = String(data: value, encoding: .utf8),
+           let device = devices[peripheral.identifier] {
+            if characteristic.uuid == ManufacturerName {
+                device.manufacture = s
+                device.logNameResolutionIfNeeded(context: "characteristic:manufacturer")
+                DispatchQueue.main.async { [weak self] in self?.delegate?.updateDevice(device: device) }
+            }
+            if characteristic.uuid == ModelName {
+                device.model = s
+                device.logNameResolutionIfNeeded(context: "characteristic:model")
+                DispatchQueue.main.async { [weak self] in self?.delegate?.updateDevice(device: device) }
+            }
+        }
+
+        let isCurrentInfoConnect = gattInfoConnectInProgress && currentGATTInfoPeripheralUUID == peripheral.identifier
+        if isInfoChar, isCurrentInfoConnect, gattInfoReadsPending > 0 {
+            gattInfoReadsPending -= 1
+            if gattInfoReadsPending == 0 {
+                finishGATTInfoConnect(peripheral, outcome: error == nil ? .success : .readError)
+                if !isMonitoring(uuid: peripheral.identifier) {
+                    centralMgr.cancelPeripheralConnection(peripheral)
                 }
             }
+        } else if !isCurrentInfoConnect, let device = devices[peripheral.identifier],
+                  device.manufacture != nil, device.model != nil,
+                  !isMonitoring(uuid: device.uuid) {
+            // Info read through a non-gated connection - release it.
+            centralMgr.cancelPeripheralConnection(peripheral)
         }
     }
     

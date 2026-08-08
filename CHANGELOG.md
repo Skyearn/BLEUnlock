@@ -1,6 +1,16 @@
 # Release Notes
 
 
+## 1.14.4
+
+- **Fix:** GATT device-info connections during scanning are now limited to monitored devices (or devices whose name/MAC matches a monitored device), connected one at a time with per-device backoff. This prevents Bluetooth resource contention — such as audio dropouts — in environments with many nearby BLE devices.
+- **Fix:** Device list no longer shows duplicate entries while a monitored device's UUID rotation is waiting for MAC correlation.
+- **Fix:** Invalid RSSI values (0 or positive) are no longer displayed as signal strength.
+- **Fix:** Unresolved devices' gray text no longer becomes nearly invisible in dark mode on macOS versions below 26.
+- **Fix:** Device list menu items are split into separate button and text elements for compatibility with older macOS versions.
+- **Fix:** Launch-at-login checkbox state now reverts when enabling fails, so it no longer shows a check that wasn't applied.
+
+
 ## 1.14.3
 
 - **Fix:** macOS 13+ now uses SMAppService.mainApp to register the main app as a login item — replaces the legacy Launcher helper. The app shows as running in background in System Settings.

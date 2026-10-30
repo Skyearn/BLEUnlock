@@ -202,6 +202,7 @@ struct DeviceMenuItemView {
     var wakeUnlockTimer: Timer?
     var postUnlockRetryTimer: Timer?
     var permissionRecoveryTimer: Timer?
+    var automaticLockTimer: Timer?
     var lastWakeAt = 0.0
     var lastDisplayWakeRequestAt = 0.0
     var lastSystemSleepStartedAt = 0.0
@@ -1549,6 +1550,8 @@ struct DeviceMenuItemView {
         }
 
         if shouldUnlock {
+            cancelAutomaticLockChecks()
+            guard ble.hasStableUnlockEvidence() else { return }
             if ble.unlockRSSI != ble.UNLOCK_DISABLED {
                 if let identifier = userNotificationID {
                     removeDeliveredNotification(identifier: identifier)
@@ -1571,14 +1574,41 @@ struct DeviceMenuItemView {
                 tryUnlockScreen()
             }
         } else if shouldLock {
-            if (!isScreenLocked() && ble.lockRSSI != ble.LOCK_DISABLED) {
-                pauseNowPlaying()
-                lockOrSaveScreenAsync()
-                notifyUser(reason)
-                runScript(reason)
-            }
+            startAutomaticLockChecks()
             manualLock = false
         }
+    }
+
+    func cancelAutomaticLockChecks() {
+        automaticLockTimer?.invalidate()
+        automaticLockTimer = nil
+    }
+
+    func startAutomaticLockChecks() {
+        guard automaticLockTimer == nil else { return }
+        let timer = Timer(timeInterval: 1, repeats: true) { [weak self] _ in
+            self?.evaluateAutomaticLock()
+        }
+        automaticLockTimer = timer
+        RunLoop.main.add(timer, forMode: .common)
+        evaluateAutomaticLock()
+    }
+
+    func evaluateAutomaticLock() {
+        guard !systemSleep, !manualLock, ble.shouldLock, !ble.presence,
+              ble.lockRSSI != ble.LOCK_DISABLED, !isScreenLocked() else {
+            cancelAutomaticLockChecks()
+            return
+        }
+        let idle = CGEventSource.secondsSinceLastEventType(.combinedSessionState,
+                                                         eventType: CGEventType(rawValue: UInt32.max)!)
+        guard let reason = ble.automaticLockReason(
+            idleSeconds: idle, protectWhileActive: prefs.bool(forKey: "preventLockWhileActive"))?.rawValue else { return }
+        cancelAutomaticLockChecks()
+        pauseNowPlaying()
+        lockOrSaveScreen()
+        notifyUser(reason)
+        runScript(reason)
     }
 
     func fakeKeyStrokes(_ string: String) {
@@ -1602,8 +1632,8 @@ struct DeviceMenuItemView {
         }
         
         // Return key
-        CGEvent(keyboardEventSource: src, virtualKey: 52, keyDown: true)?.post(tap: .cghidEventTap)
-        CGEvent(keyboardEventSource: src, virtualKey: 52, keyDown: false)?.post(tap: .cghidEventTap)
+        CGEvent(keyboardEventSource: src, virtualKey: 36, keyDown: true)?.post(tap: .cghidEventTap)
+        CGEvent(keyboardEventSource: src, virtualKey: 36, keyDown: false)?.post(tap: .cghidEventTap)
     }
 
     func sendEscapeKey() {
@@ -1644,12 +1674,19 @@ struct DeviceMenuItemView {
     func tryUnlockScreen(retryCount: Int = 0) {
         guard !manualLock else { return }
         guard ble.presence else { return }
+        guard ble.hasStableUnlockEvidence() else { return }
         guard ble.unlockRSSI != ble.UNLOCK_DISABLED else { return }
         guard !systemSleep else { return }
         guard !displaySleep else { return }
         let wakeWithoutUnlocking = self.prefs.bool(forKey: "wakeWithoutUnlocking")
         let triggerWatchUnlock = wakeWithoutUnlocking && self.prefs.bool(forKey: "triggerWatchUnlock")
         guard !wakeWithoutUnlocking || triggerWatchUnlock else { return }
+        // Repeated close observations must not postpone queued input indefinitely.
+        guard wakeUnlockTimer == nil, postUnlockRetryTimer == nil else { return }
+        guard checkAccessibility(showPrompt: false) else {
+            startPermissionRecovery(promptAccessibility: false)
+            return
+        }
         let recentlyWoke = recentlyWoke()
         let conservativeWakeUnlock = conservativeWakeUnlockNeeded()
 
@@ -1684,6 +1721,11 @@ struct DeviceMenuItemView {
         wakeUnlockTimer = Timer.scheduledTimer(withTimeInterval: unlockDelay, repeats: false, block: { [weak self] _ in
             guard let self = self else { return }
             self.wakeUnlockTimer = nil
+            guard !self.manualLock, !self.systemSleep, !self.displaySleep,
+                  self.ble.presence, self.ble.hasStableUnlockEvidence(),
+                  self.ble.unlockRSSI != self.ble.UNLOCK_DISABLED,
+                  !self.prefs.bool(forKey: "wakeWithoutUnlocking"),
+                  self.checkAccessibility(showPrompt: false) else { return }
             guard self.isScreenLocked() else {
                 if (recentlyWoke || self.inScreensaver) && retryCount < self.wakeUnlockMaxRetries {
                     self.scheduleWakeUnlock(after: self.wakeUnlockRetryDelay, retryCount: retryCount + 1)
@@ -1837,6 +1879,7 @@ struct DeviceMenuItemView {
         systemSleep = true
         lastSystemSleepStartedAt = Date().timeIntervalSince1970
         cancelAllWakeTimers()
+        cancelAutomaticLockChecks()
         ble.suspendMonitoringForSystemSleep()
         // Set activation policy to regular, so the CBCentralManager can scan for peripherals
         // when the Bluetooth will become on again.
@@ -1865,6 +1908,7 @@ struct DeviceMenuItemView {
             }
         })
         manualLock = false
+        if ble.shouldLock { startAutomaticLockChecks() }
         Timer.scheduledTimer(withTimeInterval: 2, repeats: false, block: { [weak self] _ in
             self?.runAutomaticUpdateCheck()
         })
@@ -2139,6 +2183,19 @@ struct DeviceMenuItemView {
         let value = menuItem.tag
         prefs.set(value, forKey: "timeout")
         ble.signalTimeout = Double(value)
+    }
+
+    @objc func toggleLockOnSignalLoss(_ menuItem: NSMenuItem) {
+        ble.lockOnSignalLoss.toggle()
+        prefs.set(ble.lockOnSignalLoss, forKey: "lockOnSignalLoss")
+        menuItem.state = ble.lockOnSignalLoss ? .on : .off
+        if ble.shouldLock { startAutomaticLockChecks() }
+    }
+
+    @objc func togglePreventLockWhileActive(_ menuItem: NSMenuItem) {
+        let enabled = !prefs.bool(forKey: "preventLockWhileActive")
+        prefs.set(enabled, forKey: "preventLockWhileActive")
+        menuItem.state = enabled ? .on : .off
     }
 
     @objc func setLockDelay(_ menuItem: NSMenuItem) {
@@ -2445,6 +2502,14 @@ struct DeviceMenuItemView {
         timeoutMenu.addItem(withTitle: "10 " + t("minutes"), action: #selector(setTimeout), keyEquivalent: "").tag = 600
         timeoutMenu.delegate = self
 
+        item = mainMenu.addItem(withTitle: NSLocalizedString("lock_on_signal_loss", value: "Lock When Signal Is Lost", comment: "Signal-loss locking option"),
+                                action: #selector(toggleLockOnSignalLoss), keyEquivalent: "")
+        item.state = ble.lockOnSignalLoss ? .on : .off
+        item.toolTip = NSLocalizedString("lock_on_signal_loss_help", value: "Turn off for devices that stop advertising while asleep. A device that goes out of range without weak signals will then not trigger locking.", comment: "Signal-loss locking tradeoff")
+        item = mainMenu.addItem(withTitle: NSLocalizedString("prevent_lock_while_active", value: "Prevent Locking While Mac Is in Use", comment: "Keyboard and mouse activity protection"),
+                                action: #selector(togglePreventLockWhileActive), keyEquivalent: "")
+        item.state = prefs.bool(forKey: "preventLockWhileActive") ? .on : .off
+
         item = mainMenu.addItem(withTitle: t("wake_on_proximity"), action: #selector(toggleWakeOnProximity), keyEquivalent: "")
         wakeOnProximityMenuItem = item
         if prefs.bool(forKey: "wakeOnProximity") {
@@ -2533,6 +2598,10 @@ struct DeviceMenuItemView {
             CGEvent(keyboardEventSource: src, virtualKey: 63, keyDown: true)?.post(tap: .cghidEventTap)
             CGEvent(keyboardEventSource: src, virtualKey: 63, keyDown: false)?.post(tap: .cghidEventTap)
         }
+        if #available(macOS 10.15, *) {
+            let canPostEvents = showPrompt ? CGRequestPostEventAccess() : CGPreflightPostEventAccess()
+            return trusted && canPostEvents
+        }
         return trusted
     }
 
@@ -2545,8 +2614,10 @@ struct DeviceMenuItemView {
         let accessibilityTrusted = !requiresAccessibilityPermission() || checkAccessibility(showPrompt: false)
         ble.recoverAfterPermissionChangeIfNeeded()
         guard !accessibilityTrusted || ble.needsPermissionRecovery else {
+            let recovered = permissionRecoveryTimer != nil
             permissionRecoveryTimer?.invalidate()
             permissionRecoveryTimer = nil
+            if recovered { tryUnlockScreen() }
             return
         }
         guard permissionRecoveryTimer == nil else { return }
@@ -2631,6 +2702,9 @@ struct DeviceMenuItemView {
 
     func applicationDidFinishLaunching(_ aNotification: Notification) {
         migrateLegacyAppDataIfNeeded()
+        if prefs.object(forKey: "lockOnSignalLoss") != nil {
+            ble.lockOnSignalLoss = prefs.bool(forKey: "lockOnSignalLoss")
+        }
         // Clean up all legacy login items and sync pref with actual registration state.
         smdQueue.async { [weak self] in
             guard let self = self else { return }
@@ -2740,6 +2814,7 @@ struct DeviceMenuItemView {
     }
     
     func applicationWillTerminate(_ aNotification: Notification) {
+        cancelAutomaticLockChecks()
         permissionRecoveryTimer?.invalidate()
         permissionRecoveryTimer = nil
     }

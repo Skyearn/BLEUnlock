@@ -1,6 +1,15 @@
 # Release Notes
 
 
+## 1.14.6
+
+- **Perf:** Device menu rows and the status summary are no longer rebuilt for every BLE advertisement while their menus are closed. Rows are refreshed when the device menu opens, reducing CPU usage with many nearby devices.
+- **Perf:** Active mode now stops scanning once every monitored device has an active RSSI connection, and resumes scanning when the device menu opens or a connection needs recovery. Scanning also stops when no devices are monitored.
+- **Fix:** "Lock When Signal Is Lost" is no longer a separate menu item. The No-Signal Timeout menu now offers Do Not Lock before the timeout choices; selecting a timeout re-enables signal-loss locking.
+- **Perf:** Name-resolution logging now uses os.Logger at debug level and only emits when the resolved name changes. Database and plist lookups are skipped unless debug logging is enabled.
+- **Privacy:** UUIDs, device names, and MAC addresses are marked private in name-resolution log entries.
+- **Fix:** Name-resolution logging keeps macOS 10.13/10.14 compatibility via os_log/NSLog fallback, and re-emits the current device resolution when a debug log stream is reattached.
+
 ## 1.14.5
 
 - **Feat:** Added an optional "Trigger Apple Watch Unlock" action for the "Wake without Unlocking" mode. BLEUnlock can send a harmless input event so the macOS Apple Watch unlock prompt appears, without reading or typing the Mac password. Accessibility event-posting permission is required.
